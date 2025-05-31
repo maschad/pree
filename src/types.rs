@@ -313,6 +313,10 @@ impl IpNetwork {
     pub const fn new(addr: IpAddr, prefix: u8) -> Self {
         Self { addr, prefix }
     }
+
+    pub const fn is_default(&self) -> bool {
+        self.prefix == 0
+    }
 }
 
 impl std::fmt::Display for IpNetwork {
