@@ -370,6 +370,7 @@ mod macos {
 
     // TCP control constants
     const TCPCTL_PCBLIST: c_int = 1;
+    const UDPCTL_PCBLIST: c_int = 1;
     const TCP_INFO: c_int = 0x20; // TCP_INFO socket option
 
     #[repr(C)]
@@ -456,7 +457,6 @@ mod macos {
         sockets
     }
 
-    #[allow(clippy::too_many_lines)]
     fn get_tcp_sockets() -> Result<Vec<SocketInfo>, NetworkError> {
         let mut size = 0;
         let mut mib = [
@@ -505,9 +505,19 @@ mod macos {
         let mut sockets = Vec::new();
         let mut offset = 0;
 
+        // Skip the header structure
+        offset += mem::size_of::<u32>(); // Skip the count
+
         while offset < size {
             #[allow(clippy::cast_ptr_alignment)]
             let pcb = unsafe { &*buffer.as_ptr().add(offset).cast::<xinpcb>() };
+
+            // Skip if the socket is null
+            if pcb.socket.is_null() {
+                offset += mem::size_of::<xinpcb>();
+                continue;
+            }
+
             let local_addr = SocketAddr::new(
                 IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
                     pcb.laddr.sin_addr.s_addr,
@@ -554,19 +564,9 @@ mod macos {
                 remote_addr,
                 state,
                 protocol: Protocol::Tcp,
-                process_id: process_info.clone().map(|info| info.pid),
-                process_name: None,
-                stats: get_socket_stats(pcb.socket),
-            });
-
-            sockets.push(SocketInfo {
-                local_addr,
-                remote_addr,
-                state: SocketState::Established, // UDP sockets are always in Established state
-                protocol: Protocol::Udp,
                 process_id: process_info.map(|info| info.pid),
                 process_name: None,
-                stats: None, // UDP doesn't have TCP-specific stats
+                stats: get_socket_stats(pcb.socket),
             });
 
             offset += mem::size_of::<xinpcb>();
@@ -581,11 +581,11 @@ mod macos {
             libc::CTL_NET,
             libc::AF_INET,
             libc::IPPROTO_UDP,
-            TCPCTL_PCBLIST,
+            UDPCTL_PCBLIST,
             0,
         ];
 
-        // Get required buffer size from sysctl
+        // Get required buffer size
         unsafe {
             if libc::sysctl(
                 mib.as_mut_ptr(),
@@ -602,7 +602,7 @@ mod macos {
             }
         }
 
-        // Allocate buffer and get socket info from sysctl
+        // Allocate buffer and get socket info
         let mut buffer = vec![0u8; size];
         unsafe {
             if libc::sysctl(
@@ -623,9 +623,19 @@ mod macos {
         let mut sockets = Vec::new();
         let mut offset = 0;
 
+        // Skip the header structure
+        offset += mem::size_of::<u32>(); // Skip the count
+
         while offset < size {
             #[allow(clippy::cast_ptr_alignment)]
             let pcb = unsafe { &*buffer.as_ptr().add(offset).cast::<xinpcb>() };
+
+            // Skip if the socket is null
+            if pcb.socket.is_null() {
+                offset += mem::size_of::<xinpcb>();
+                continue;
+            }
+
             let local_addr = SocketAddr::new(
                 IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
                     pcb.laddr.sin_addr.s_addr,
@@ -640,16 +650,7 @@ mod macos {
                 u16::from_be(pcb.fport),
             );
 
-            let socket = unsafe { &*pcb.socket.cast::<xsocket>() };
-            let state = match socket.so_state {
-                TCP_ESTABLISHED => SocketState::Established,
-                TCP_SYN_SENT | TCP_SYN_RECV => SocketState::Connecting,
-                TCP_FIN_WAIT1 | TCP_FIN_WAIT2 | TCP_TIME_WAIT | TCP_CLOSE_WAIT | TCP_LAST_ACK
-                | TCP_CLOSING => SocketState::Closing,
-                TCP_CLOSE => SocketState::Closed,
-                TCP_LISTEN => SocketState::Listen,
-                _ => SocketState::Unknown("Unknown TCP state".to_string()),
-            };
+            let state = SocketState::Established; // UDP sockets are always in Established state
 
             let process_info = if pcb.pid > 0 {
                 Some(ProcessInfo {
@@ -674,7 +675,7 @@ mod macos {
                 protocol: Protocol::Udp,
                 process_id: process_info.map(|info| info.pid),
                 process_name: None,
-                stats: None, // UDP doesn't have TCP-specific stats
+                stats: None,
             });
 
             offset += mem::size_of::<xinpcb>();

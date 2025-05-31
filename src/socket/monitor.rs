@@ -231,3 +231,122 @@ impl Drop for SocketMonitor {
         self.stop();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[test]
+    fn test_monitor_creation() {
+        let monitor = SocketMonitor::new();
+        assert!(!monitor.running);
+        assert_eq!(monitor.interval, Duration::from_secs(1));
+
+        let monitor = SocketMonitor::new().interval(Duration::from_millis(500));
+        assert_eq!(monitor.interval, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_callback_registration() {
+        let mut monitor = SocketMonitor::new();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&counter);
+
+        monitor
+            .on_socket_change(move |_event| {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .unwrap();
+
+        // Verify callback was registered
+        let callbacks_length = monitor.callbacks.lock().unwrap().len();
+        assert_eq!(callbacks_length, 1);
+    }
+
+    #[test]
+    fn test_start_stop() {
+        let mut monitor = SocketMonitor::new();
+        assert!(!monitor.running);
+
+        monitor.start().unwrap();
+        assert!(monitor.running);
+
+        monitor.stop();
+        assert!(!monitor.running);
+    }
+
+    #[test]
+    fn test_socket_events() {
+        let mut monitor = SocketMonitor::new();
+        let opened_count = Arc::new(AtomicUsize::new(0));
+        let closed_count = Arc::new(AtomicUsize::new(0));
+        let state_changed_count = Arc::new(AtomicUsize::new(0));
+
+        let opened_clone = Arc::clone(&opened_count);
+        let closed_clone = Arc::clone(&closed_count);
+        let state_changed_clone = Arc::clone(&state_changed_count);
+
+        monitor
+            .on_socket_change(move |event| {
+                match event {
+                    SocketEvent::Opened(_) => opened_clone.fetch_add(1, Ordering::SeqCst),
+                    SocketEvent::Closed(_) => closed_clone.fetch_add(1, Ordering::SeqCst),
+                    SocketEvent::StateChanged(_) => {
+                        state_changed_clone.fetch_add(1, Ordering::SeqCst)
+                    }
+                };
+            })
+            .unwrap();
+
+        monitor.start().unwrap();
+
+        // Give some time for events to be processed
+        std::thread::sleep(Duration::from_secs(2));
+
+        // Ensure monitor is dropped after sleep
+        drop(monitor);
+
+        // We can't make strong assertions about the counts since they depend on system state,
+        // but we can verify the callback was called
+        assert!(
+            opened_count.load(Ordering::SeqCst)
+                + closed_count.load(Ordering::SeqCst)
+                + state_changed_count.load(Ordering::SeqCst)
+                > 0
+        );
+    }
+
+    #[test]
+    fn test_multiple_callbacks() {
+        let mut monitor = SocketMonitor::new();
+        let counter1 = Arc::new(AtomicUsize::new(0));
+        let counter2 = Arc::new(AtomicUsize::new(0));
+
+        let counter1_clone = Arc::clone(&counter1);
+        let counter2_clone = Arc::clone(&counter2);
+
+        monitor
+            .on_socket_change(move |_event| {
+                counter1_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .unwrap();
+
+        monitor
+            .on_socket_change(move |_event| {
+                counter2_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .unwrap();
+
+        monitor.start().unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+
+        // Ensure monitor is dropped after sleep
+        drop(monitor);
+
+        // Both callbacks should have been called
+        assert!(counter1.load(Ordering::SeqCst) > 0);
+        assert!(counter2.load(Ordering::SeqCst) > 0);
+    }
+}
