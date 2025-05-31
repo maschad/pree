@@ -1,4 +1,8 @@
-use pree::socket::{SocketEvent, SocketMonitor, TcpSocket, UdpSocket};
+use pree::socket::monitor::SocketEvent;
+use pree::socket::monitor::SocketMonitor;
+use pree::socket::socket::SocketConfig;
+use pree::socket::tcp::TcpSocket;
+use pree::socket::udp::UdpSocket;
 use std::thread;
 use std::time::Duration;
 
@@ -12,12 +16,14 @@ fn main() -> pree::Result<()> {
             println!("New socket opened:");
             println!("  Protocol: {}", socket.protocol);
             println!("  Local: {}", socket.local_addr);
-            if let Some(remote) = socket.remote_addr {
-                println!("  Remote: {}", remote);
-            }
+            println!("  Remote: {}", socket.remote_addr);
             println!("  State: {:?}", socket.state);
-            if let Some(process) = &socket.process {
-                println!("  Process: {} (PID: {})", process.name, process.pid);
+            if let Some(pid) = socket.process_id {
+                println!(
+                    "  Process: {} (PID: {})",
+                    socket.process_name.unwrap_or_default(),
+                    pid
+                );
             }
             println!();
         }
@@ -25,18 +31,14 @@ fn main() -> pree::Result<()> {
             println!("Socket closed:");
             println!("  Protocol: {}", socket.protocol);
             println!("  Local: {}", socket.local_addr);
-            if let Some(remote) = socket.remote_addr {
-                println!("  Remote: {}", remote);
-            }
+            println!("  Remote: {}", socket.remote_addr);
             println!();
         }
         SocketEvent::StateChanged(socket) => {
             println!("Socket state changed:");
             println!("  Protocol: {}", socket.protocol);
             println!("  Local: {}", socket.local_addr);
-            if let Some(remote) = socket.remote_addr {
-                println!("  Remote: {}", remote);
-            }
+            println!("  Remote: {}", socket.remote_addr);
             println!("  New State: {:?}", socket.state);
             println!();
         }

@@ -1,3 +1,7 @@
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_possible_truncation)]
+
 use bytesize::ByteSize;
 use std::time::Duration;
 
@@ -55,7 +59,10 @@ pub struct Interface {
 
 impl Interface {
     /// Get all available network interfaces
-    pub fn list() -> Result<Vec<Interface>> {
+    ///
+    /// # Errors
+    /// Returns an error if listing interfaces fails
+    pub fn list() -> Result<Vec<Self>> {
         #[cfg(unix)]
         {
             crate::platform::list_interfaces()
@@ -67,7 +74,10 @@ impl Interface {
     }
 
     /// Get a specific interface by name
-    pub fn by_name(name: &str) -> Result<Interface> {
+    ///
+    /// # Errors
+    /// Returns an error if the interface is not found or if listing interfaces fails
+    pub fn by_name(name: &str) -> Result<Self> {
         Self::list()?
             .into_iter()
             .find(|iface| iface.name == name)
@@ -75,7 +85,11 @@ impl Interface {
     }
 
     /// Get the default interface (usually the one with the default route)
-    pub fn default() -> Result<Interface> {
+    ///
+    /// # Errors
+    /// Returns an error if no default interface is found or if listing interfaces fails
+    #[allow(clippy::should_implement_trait)]
+    pub fn default() -> Result<Self> {
         #[cfg(unix)]
         {
             crate::platform::get_default_interface()
@@ -87,6 +101,9 @@ impl Interface {
     }
 
     /// Update the interface statistics
+    ///
+    /// # Errors
+    /// Returns an error if updating interface statistics fails
     pub fn update_stats(&mut self) -> Result<()> {
         #[cfg(unix)]
         {
@@ -100,6 +117,7 @@ impl Interface {
     }
 
     /// Get the current bandwidth usage (bytes per second)
+    #[must_use]
     pub fn bandwidth(&self, previous_stats: &InterfaceStats) -> (u64, u64) {
         let rx_delta = self.stats.rx_bytes.saturating_sub(previous_stats.rx_bytes);
         let tx_delta = self.stats.tx_bytes.saturating_sub(previous_stats.tx_bytes);
@@ -141,14 +159,14 @@ impl std::fmt::Display for Interface {
         if !self.ipv4.is_empty() {
             writeln!(f, "  IPv4:")?;
             for ip in &self.ipv4 {
-                writeln!(f, "    {}", ip)?;
+                writeln!(f, "    {ip}")?;
             }
         }
 
         if !self.ipv6.is_empty() {
             writeln!(f, "  IPv6:")?;
             for ip in &self.ipv6 {
-                writeln!(f, "    {}", ip)?;
+                writeln!(f, "    {ip}")?;
             }
         }
 

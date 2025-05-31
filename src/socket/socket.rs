@@ -16,20 +16,28 @@ use serde::{Deserialize, Serialize};
 /// Common trait for socket configuration and enumeration
 pub trait SocketConfig: Sized {
     /// List all sockets of this type
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
     fn list() -> Result<Vec<Self>>;
 
     /// List sockets belonging to a specific process
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
     fn list_by_process(pid: u32) -> Result<Vec<Self>>;
 
     /// Count active sockets
-    fn count_active() -> Result<usize> {
-        Ok(Self::list()?.into_iter().filter(|s| s.is_active()).count())
-    }
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
+    fn count_active() -> Result<usize>;
 
     /// Find socket by local address
-    fn find_by_local_addr(addr: SocketAddr) -> Result<Option<Self>> {
-        Ok(Self::list()?.into_iter().find(|s| s.local_addr() == addr))
-    }
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
+    fn find_by_local_addr(addr: SocketAddr) -> Result<Option<Self>>;
 
     /// Check if this socket is active (established, listening, or bound)
     fn is_active(&self) -> bool;
@@ -84,8 +92,9 @@ pub struct SocketInfo {
 }
 
 impl SocketInfo {
-    /// Create a new SocketInfo
-    pub fn new(
+    /// Create a new instance
+    #[must_use]
+    pub const fn new(
         local_addr: SocketAddr,
         remote_addr: Option<SocketAddr>,
         state: SocketState,
@@ -111,54 +120,65 @@ impl SocketInfo {
     }
 
     /// Check if this socket is actively handling data
-    pub fn is_active(&self) -> bool {
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
         self.state.is_active()
     }
 
     /// Check if this socket is listening for connections
+    #[must_use]
     pub fn is_listening(&self) -> bool {
         self.state == SocketState::Listen
     }
 
     /// Check if this socket has an established connection
+    #[must_use]
     pub fn is_established(&self) -> bool {
         self.state == SocketState::Established
     }
 
     /// Get the port number of the local address
-    pub fn local_port(&self) -> u16 {
+    #[must_use]
+    pub const fn local_port(&self) -> u16 {
         self.local_addr.port()
     }
 
     /// Get the port number of the remote address (if connected)
+    #[must_use]
     pub fn remote_port(&self) -> Option<u16> {
         self.remote_addr.map(|addr| addr.port())
     }
 
     /// Check if this socket belongs to a specific process
+    #[must_use]
     pub fn belongs_to_process(&self, pid: u32) -> bool {
         self.process.as_ref().map(|p| p.pid) == Some(pid)
     }
 
     /// Get a human-readable description of this socket
+    #[must_use]
     pub fn description(&self) -> String {
         let process_name = self
             .process
             .as_ref()
             .and_then(|p| p.name.as_ref())
-            .map(|n| format!(" ({})", n))
+            .map(|n| format!(" ({n})"))
             .unwrap_or_default();
 
-        match self.remote_addr {
-            Some(remote) => format!(
-                "{} {} -> {} {}{}",
-                self.protocol, self.local_addr, remote, self.state, process_name
-            ),
-            None => format!(
-                "{} {} {}{}",
-                self.protocol, self.local_addr, self.state, process_name
-            ),
-        }
+        self.remote_addr.map_or_else(
+            || {
+                format!(
+                    "{} {} {}{}",
+                    self.protocol, self.local_addr, self.state, process_name
+                )
+            },
+            |remote| {
+                format!(
+                    "{} {} -> {} {}{}",
+                    self.protocol, self.local_addr, remote, self.state, process_name
+                )
+            },
+        )
     }
 }
 
@@ -183,53 +203,62 @@ pub struct SocketFilter {
 
 impl SocketFilter {
     /// Create a new empty filter
+    #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     /// Filter by protocol
-    pub fn protocol(mut self, protocol: Protocol) -> Self {
+    #[must_use]
+    pub const fn protocol(mut self, protocol: Protocol) -> Self {
         self.protocol = Some(protocol);
         self
     }
 
     /// Filter by state
+    #[must_use]
     pub fn state(mut self, state: SocketState) -> Self {
         self.state = Some(state);
         self
     }
 
     /// Filter by process ID
-    pub fn process_id(mut self, pid: u32) -> Self {
+    #[must_use]
+    pub const fn process_id(mut self, pid: u32) -> Self {
         self.process_id = Some(pid);
         self
     }
 
     /// Filter by local port
-    pub fn local_port(mut self, port: u16) -> Self {
+    #[must_use]
+    pub const fn local_port(mut self, port: u16) -> Self {
         self.local_port = Some(port);
         self
     }
 
     /// Filter by remote port
-    pub fn remote_port(mut self, port: u16) -> Self {
+    #[must_use]
+    pub const fn remote_port(mut self, port: u16) -> Self {
         self.remote_port = Some(port);
         self
     }
 
     /// Only show listening sockets
-    pub fn listening_only(mut self) -> Self {
+    #[must_use]
+    pub const fn listening_only(mut self) -> Self {
         self.listening_only = true;
         self
     }
 
     /// Only show established connections
-    pub fn established_only(mut self) -> Self {
+    #[must_use]
+    pub const fn established_only(mut self) -> Self {
         self.established_only = true;
         self
     }
 
     /// Check if a socket matches this filter
+    #[must_use]
     pub fn matches(&self, socket: &SocketInfo) -> bool {
         if let Some(protocol) = self.protocol {
             if socket.protocol != protocol {
@@ -274,11 +303,15 @@ impl SocketFilter {
 }
 
 /// Apply a filter to a list of sockets
+#[must_use]
 pub fn filter_sockets(sockets: Vec<SocketInfo>, filter: &SocketFilter) -> Vec<SocketInfo> {
     sockets.into_iter().filter(|s| filter.matches(s)).collect()
 }
 
 /// Get all sockets (TCP and UDP) matching the filter
+///
+/// # Errors
+/// Returns an error if listing TCP or UDP sockets fails
 pub fn list_all_sockets(filter: Option<SocketFilter>) -> Result<Vec<SocketInfo>> {
     let mut sockets = Vec::new();
 
@@ -301,6 +334,9 @@ pub fn list_all_sockets(filter: Option<SocketFilter>) -> Result<Vec<SocketInfo>>
 }
 
 /// Count total active sockets (TCP + UDP)
+///
+/// # Errors
+/// Returns an error if counting TCP or UDP sockets fails
 pub fn count_total_active() -> Result<usize> {
     let tcp_count = TcpSocket::count_active()?;
     let udp_count = UdpSocket::count_active()?;
@@ -308,8 +344,9 @@ pub fn count_total_active() -> Result<usize> {
 }
 
 /// State of a TCP socket
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TcpState {
+    #[default]
     Established,
     SynSent,
     SynRecv,
@@ -325,18 +362,17 @@ pub enum TcpState {
     Other(u8),
 }
 
-impl Default for TcpState {
-    fn default() -> Self {
-        TcpState::Established
-    }
-}
-
 impl From<TcpState> for SocketState {
     fn from(state: TcpState) -> Self {
         match state {
-            TcpState::Established => SocketState::Established,
-            TcpState::Listen => SocketState::Listen,
-            _ => SocketState::Unknown("Unknown TCP state".to_string()),
+            TcpState::Established => Self::Established,
+            TcpState::Listen => Self::Listen,
+            TcpState::SynSent | TcpState::SynRecv => Self::Connecting,
+            TcpState::FinWait1 | TcpState::FinWait2 | TcpState::TimeWait | TcpState::CloseWait => {
+                Self::Closing
+            }
+            TcpState::Close => Self::Closed,
+            _ => Self::Unknown("Unknown TCP state".to_string()),
         }
     }
 }
@@ -356,14 +392,17 @@ pub struct Socket {
 
 impl Socket {
     /// Get all open sockets
-    pub fn list() -> Result<Vec<Socket>> {
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
+    pub fn list() -> Result<Vec<Self>> {
         #[cfg(unix)]
         {
             crate::socket::platform::get_sockets_info()
-                .map_err(|e| crate::error::Error::from(e))?
+                .map_err(crate::error::Error::from)?
                 .into_iter()
                 .map(|info| {
-                    Ok(Socket {
+                    Ok(Self {
                         protocol: info.protocol,
                         local_addr: info.local_addr,
                         remote_addr: Some(info.remote_addr),
@@ -398,7 +437,10 @@ impl Socket {
     }
 
     /// Get sockets for a specific process
-    pub fn for_process(pid: u32) -> Result<Vec<Socket>> {
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
+    pub fn for_process(pid: u32) -> Result<Vec<Self>> {
         Ok(Self::list()?
             .into_iter()
             .filter(|socket| socket.process_id == Some(pid))
@@ -406,7 +448,10 @@ impl Socket {
     }
 
     /// Get sockets listening on a specific port
-    pub fn listening_on(port: u16) -> Result<Vec<Socket>> {
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
+    pub fn listening_on(port: u16) -> Result<Vec<Self>> {
         Ok(Self::list()?
             .into_iter()
             .filter(|socket| socket.local_addr.port() == port)
@@ -414,15 +459,13 @@ impl Socket {
     }
 
     /// Get sockets connected to a specific address
-    pub fn connected_to(addr: IpAddr) -> Result<Vec<Socket>> {
+    ///
+    /// # Errors
+    /// Returns an error if socket listing fails
+    pub fn connected_to(addr: IpAddr) -> Result<Vec<Self>> {
         Ok(Self::list()?
             .into_iter()
-            .filter(|socket| {
-                socket
-                    .remote_addr
-                    .map(|remote| remote.ip() == addr)
-                    .unwrap_or(false)
-            })
+            .filter(|socket| socket.remote_addr.is_some_and(|remote| remote.ip() == addr))
             .collect())
     }
 }
@@ -437,7 +480,7 @@ impl std::fmt::Display for Socket {
                 Protocol::Udp => "udp",
                 Protocol::Raw => "raw",
                 Protocol::Icmp => "icmp",
-                Protocol::Other(p) => return write!(f, "proto({})", p),
+                Protocol::Other(p) => return write!(f, "proto({p})"),
             }
         )?;
 
@@ -464,9 +507,9 @@ impl std::fmt::Display for Socket {
         }
 
         if let Some(pid) = self.process_id {
-            write!(f, " pid={}", pid)?;
+            write!(f, " pid={pid}")?;
             if let Some(name) = &self.process_name {
-                write!(f, " ({})", name)?;
+                write!(f, " ({name})")?;
             }
         }
 

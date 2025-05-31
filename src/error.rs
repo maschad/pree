@@ -146,27 +146,27 @@ pub enum NetworkError {
 impl From<NetworkError> for Error {
     fn from(err: NetworkError) -> Self {
         match err {
-            NetworkError::Io(e) => Error::Io(e),
-            NetworkError::Parse(e) => Error::ParseInt(e),
-            NetworkError::Platform(msg) => Error::SystemCall {
+            NetworkError::Io(e) => Self::Io(e),
+            NetworkError::Parse(e) => Self::ParseInt(e),
+            NetworkError::Platform(msg) => Self::SystemCall {
                 operation: msg,
                 code: -1,
             },
             NetworkError::InvalidIpAddress(msg) => {
-                Error::InvalidFormat("IP address".to_string(), msg)
+                Self::InvalidFormat("IP address".to_string(), msg)
             }
             NetworkError::InvalidMacAddress(msg) => {
-                Error::InvalidFormat("MAC address".to_string(), msg)
+                Self::InvalidFormat("MAC address".to_string(), msg)
             }
-            NetworkError::UnsupportedPlatform => Error::unsupported_platform("socket operation"),
+            NetworkError::UnsupportedPlatform => Self::unsupported_platform("socket operation"),
             NetworkError::InvalidData => {
-                Error::InvalidFormat("socket data".to_string(), "invalid format".to_string())
+                Self::InvalidFormat("socket data".to_string(), "invalid format".to_string())
             }
-            NetworkError::OsError(code) => Error::SystemCall {
+            NetworkError::OsError(code) => Self::SystemCall {
                 operation: "socket operation".to_string(),
                 code,
             },
-            NetworkError::InterfaceNotFound(name) => Error::InterfaceNotFound { name },
+            NetworkError::InterfaceNotFound(name) => Self::InterfaceNotFound { name },
         }
     }
 }

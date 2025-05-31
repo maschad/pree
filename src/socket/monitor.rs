@@ -33,8 +33,15 @@ pub struct SocketMonitor {
     running: bool,
 }
 
+impl Default for SocketMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SocketMonitor {
     /// Create a new socket monitor with default settings
+    #[must_use]
     pub fn new() -> Self {
         let (tx, rx) = channel();
         Self {
@@ -47,12 +54,16 @@ impl SocketMonitor {
     }
 
     /// Set the polling interval for socket changes
-    pub fn interval(mut self, interval: Duration) -> Self {
+    #[must_use]
+    pub const fn interval(mut self, interval: Duration) -> Self {
         self.interval = interval;
         self
     }
 
     /// Register a callback for socket events
+    ///
+    /// # Errors
+    /// Returns an error if the callback cannot be registered
     pub fn on_socket_change<F>(&mut self, callback: F) -> Result<()>
     where
         F: Fn(SocketEvent) + Send + 'static,
@@ -64,6 +75,12 @@ impl SocketMonitor {
     }
 
     /// Start monitoring socket changes
+    ///
+    /// # Panics
+    /// May panic if the mutex lock fails
+    ///
+    /// # Errors
+    /// Returns an error if socket monitoring fails to start
     #[allow(clippy::too_many_lines)]
     pub fn start(&mut self) -> Result<()> {
         if self.running {
@@ -102,9 +119,9 @@ impl SocketMonitor {
                                 protocol: match socket.protocol {
                                     Protocol::Tcp => Protocol::Tcp,
                                     Protocol::Udp => Protocol::Udp,
-                                    Protocol::Icmp => Protocol::Tcp,
-                                    Protocol::Raw => Protocol::Tcp,
-                                    Protocol::Other(_) => Protocol::Tcp,
+                                    Protocol::Icmp | Protocol::Raw | Protocol::Other(_) => {
+                                        Protocol::Tcp
+                                    }
                                 },
                                 process_id: socket.process_id,
                                 process_name: socket.process_name.clone(),
@@ -133,9 +150,9 @@ impl SocketMonitor {
                                 protocol: match socket.protocol {
                                     Protocol::Tcp => Protocol::Tcp,
                                     Protocol::Udp => Protocol::Udp,
-                                    Protocol::Icmp => Protocol::Tcp,
-                                    Protocol::Raw => Protocol::Tcp,
-                                    Protocol::Other(_) => Protocol::Tcp,
+                                    Protocol::Icmp | Protocol::Raw | Protocol::Other(_) => {
+                                        Protocol::Tcp
+                                    }
                                 },
                                 process_id: socket.process_id,
                                 process_name: socket.process_name.clone(),
@@ -167,9 +184,9 @@ impl SocketMonitor {
                                     protocol: match socket.protocol {
                                         Protocol::Tcp => Protocol::Tcp,
                                         Protocol::Udp => Protocol::Udp,
-                                        Protocol::Icmp => Protocol::Tcp,
-                                        Protocol::Raw => Protocol::Tcp,
-                                        Protocol::Other(_) => Protocol::Tcp,
+                                        Protocol::Icmp | Protocol::Raw | Protocol::Other(_) => {
+                                            Protocol::Tcp
+                                        }
                                     },
                                     process_id: socket.process_id,
                                     process_name: socket.process_name.clone(),
@@ -190,7 +207,8 @@ impl SocketMonitor {
         // Start event processing thread
         let callbacks = Arc::clone(&self.callbacks);
         thread::spawn(move || {
-            while let Ok(event) = rx.lock().unwrap().recv() {
+            let rx = rx.lock().unwrap();
+            while let Ok(event) = rx.recv() {
                 if let Ok(callbacks) = callbacks.lock() {
                     for callback in callbacks.iter() {
                         callback(event.clone());
@@ -203,7 +221,7 @@ impl SocketMonitor {
     }
 
     /// Stop monitoring socket changes
-    pub fn stop(&mut self) {
+    pub const fn stop(&mut self) {
         self.running = false;
     }
 }
