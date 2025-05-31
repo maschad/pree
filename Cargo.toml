@@ -19,12 +19,6 @@ log        = "0.4.27"
 nix        = { version = "0.30.1", features = ["net", "socket"] }
 thiserror  = "2.0.12"
 
-# Platform-specific dependencies
-[target.'cfg(target_os = "linux")'.dependencies]
-futures              = "0.3"
-netlink-packet-core  = "0.7"
-netlink-packet-route = "0.24.0"
-netlink-sys          = "0.8"
 
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -56,3 +50,33 @@ socket-tracking = []
 [dev-dependencies]
 mockall    = "0.13.1"
 tokio-test = "0.4.4"
+
+[[example]]
+name              = "interface_stats"
+path              = "examples/interface_stats.rs"
+required-features = []
+
+[[example]]
+name              = "bandwidth_monitor"
+path              = "examples/bandwidth_monitor.rs"
+required-features = []
+
+[[example]]
+name              = "dns_config"
+path              = "examples/dns_config.rs"
+required-features = ["dns-cache"]
+
+[[example]]
+name              = "routing_table"
+path              = "examples/routing_table.rs"
+required-features = []
+
+[[example]]
+name              = "socket_monitor"
+path              = "examples/socket_monitor.rs"
+required-features = ["socket-tracking"]
+
+[[example]]
+name              = "port_checker"
+path              = "examples/port_checker.rs"
+required-features = ["socket-tracking"]

@@ -36,6 +36,7 @@ mod platform;
 mod types;
 
 pub mod interface;
+pub mod routing;
 pub mod socket;
 
 // Re-export core types and traits
@@ -44,7 +45,7 @@ pub use types::{ProcessInfo, SocketState};
 
 // Interface monitoring (extends network-interface functionality)
 use crate::error::NetworkError;
-pub use interface::{Interface, InterfaceStats};
+pub use interface::{Interface, InterfaceEvent, InterfaceMonitor, InterfaceStats};
 
 // Socket enumeration
 pub use socket::monitor::SocketMonitor;

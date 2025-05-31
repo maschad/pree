@@ -170,3 +170,17 @@ impl From<NetworkError> for Error {
         }
     }
 }
+
+impl From<Error> for NetworkError {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::Io(e) => Self::Io(e),
+            Error::ParseInt(e) => Self::Parse(e),
+            Error::SystemCall { operation, .. } => Self::Platform(operation),
+            Error::UnsupportedPlatform { .. } => Self::UnsupportedPlatform,
+            Error::InvalidFormat(_, _) => Self::InvalidData,
+            Error::InterfaceNotFound { name } => Self::InterfaceNotFound(name),
+            _ => Self::Platform(err.to_string()),
+        }
+    }
+}
