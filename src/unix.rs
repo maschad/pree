@@ -12,6 +12,9 @@ use crate::NetworkError;
 pub type Result<T> = std::result::Result<T, NetworkError>;
 
 /// List all available network interfaces
+///
+/// # Errors
+/// Returns an error if reading interface information fails
 pub fn list_interfaces() -> Result<Vec<Interface>> {
     let mut interfaces = Vec::new();
 
@@ -36,6 +39,7 @@ fn get_interface_info(name: &str) -> Result<Interface> {
     // Read interface flags
     let flags = fs::read_to_string(base_path.join("flags"))?;
     let flags = u32::from_str_radix(flags.trim(), 16)?;
+    #[allow(clippy::cast_possible_wrap)]
     let flags = InterfaceFlags::from_bits_truncate(flags as i32);
 
     // Read MTU
@@ -44,7 +48,9 @@ fn get_interface_info(name: &str) -> Result<Interface> {
     // Read MAC address
     let mac = fs::read_to_string(base_path.join("address"))?;
     let mac = mac.trim();
-    let mac_address = if mac != "00:00:00:00:00:00" {
+    let mac_address = if mac == "00:00:00:00:00:00" {
+        None
+    } else {
         let bytes: Vec<u8> = mac
             .split(':')
             .map(|b| u8::from_str_radix(b, 16).unwrap_or(0))
@@ -56,8 +62,6 @@ fn get_interface_info(name: &str) -> Result<Interface> {
         } else {
             None
         }
-    } else {
-        None
     };
 
     // Determine interface type
@@ -116,6 +120,9 @@ fn get_interface_info(name: &str) -> Result<Interface> {
 }
 
 /// Get the default network interface
+///
+/// # Errors
+/// Returns an error if the default interface cannot be found
 pub fn get_default_interface() -> Result<Interface> {
     // Try to get the interface with the default route
     let output = std::process::Command::new("ip")
@@ -138,6 +145,9 @@ pub fn get_default_interface() -> Result<Interface> {
 }
 
 /// Get statistics for a network interface
+///
+/// # Errors
+/// Returns an error if reading interface statistics fails
 pub fn get_interface_stats(name: &str) -> Result<InterfaceStats> {
     let stats_path = Path::new("/sys/class/net").join(name).join("statistics");
 

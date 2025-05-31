@@ -18,6 +18,7 @@ pub struct TcpSocket {
 
 impl TcpSocket {
     /// Create a new TCP socket instance
+    #[must_use]
     pub fn new(
         local_addr: SocketAddr,
         remote_addr: Option<SocketAddr>,
@@ -51,6 +52,21 @@ impl TcpSocket {
 }
 
 impl SocketConfig for TcpSocket {
+    fn find_by_local_addr(addr: SocketAddr) -> Result<Option<Self>> {
+        Ok(Socket::list()?
+            .into_iter()
+            .filter(|s| s.protocol == Protocol::Tcp)
+            .find(|s| s.local_addr == addr)
+            .map(|socket| Self {
+                local_addr: socket.local_addr,
+                remote_addr: socket.remote_addr,
+                state: TcpState::Established,
+                process_id: socket.process_id,
+                process_name: socket.process_name,
+                process_info: None,
+            }))
+    }
+
     fn list() -> Result<Vec<Self>> {
         Socket::list()?
             .into_iter()
@@ -74,7 +90,10 @@ impl SocketConfig for TcpSocket {
                 Ok(Self {
                     local_addr: socket.local_addr,
                     remote_addr: socket.remote_addr,
-                    state: match socket.state.unwrap_or(SocketState::Unknown("".to_string())) {
+                    state: match socket
+                        .state
+                        .unwrap_or_else(|| SocketState::Unknown(String::new()))
+                    {
                         SocketState::Established => TcpState::Established,
                         SocketState::Listen => TcpState::Listen,
                         _ => TcpState::Other(0),
@@ -128,12 +147,12 @@ impl SocketConfig for TcpSocket {
 
 impl From<TcpSocket> for SocketInfo {
     fn from(socket: TcpSocket) -> Self {
-        SocketInfo {
+        Self {
             local_addr: socket.local_addr,
             remote_addr: socket
                 .remote_addr
                 .unwrap_or_else(|| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)),
-            state: SocketState::from(socket.state()),
+            state: socket.state.into(),
             protocol: Protocol::Tcp,
             process_id: socket.process_id,
             process_name: socket.process_name,

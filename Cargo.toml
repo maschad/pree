@@ -1,85 +1,58 @@
 [package]
-name = "pree"
+authors     = ["Chad Nehemiah <chad.nehemiah94@gmail.com>"]
+categories  = ["network-programming", "os", "development-tools::debugging"]
 description = "Cross-platform network diagnostics and monitoring for Rust applications"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-authors = ["Chad Nehemiah <chad.nehemiah94@gmail.com>"]
-repository = "https://github.com/maschad/pree"
-categories = ["network-programming", "os", "development-tools::debugging"]
-keywords = [
-	"network",
-	"monitoring",
-	"sockets",
-	"diagnostics",
-	"cross-platform",
-	"pree",
-]
-readme = "README.md"
+edition     = "2021"
+keywords    = ["network", "monitoring", "sockets", "diagnostics", "cross-platform", "pree"]
+license     = "MIT OR Apache-2.0"
+name        = "pree"
+readme      = "README.md"
+repository  = "https://github.com/maschad/pree"
+version     = "0.1.0"
 
 [dependencies]
 # Core dependencies
-libc = "0.2.172"
-thiserror = "2.0.12"
-log = "0.4.27"
+bytesize   = "2.0.1"
 env_logger = "0.11.8"
-bytesize = "2.0.1"
-nix = { version = "0.30.1", features = ["net", "socket"] }
+libc       = "0.2.172"
+log        = "0.4.27"
+nix        = { version = "0.30.1", features = ["net", "socket"] }
+thiserror  = "2.0.12"
 
 # Platform-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
+futures              = "0.3"
+netlink-packet-core  = "0.7"
 netlink-packet-route = "0.24.0"
-netlink-packet-core = "0.7"
-netlink-sys = "0.8"
-futures = "0.3"
+netlink-sys          = "0.8"
 
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3", features = [
-	"ws2def",
-	"ws2ipdef",
-	"netioapi",
-	"iphlpapi",
-	"iptypes",
-	"ntdef",
-	"winerror",
-	"processthreadsapi",
-	"handleapi",
+    "ws2def",
+    "ws2ipdef",
+    "netioapi",
+    "iphlpapi",
+    "iptypes",
+    "ntdef",
+    "winerror",
+    "processthreadsapi",
+    "handleapi",
 ] }
 
 # Optional dependencies
-tokio = { version = "1.0", features = ["full"], optional = true }
-serde = { version = "1.0.219", features = ["derive"], optional = true }
 async-trait = { version = "0.1", optional = true }
+serde       = { version = "1.0.219", features = ["derive"], optional = true }
+tokio       = { version = "1.0", features = ["full"], optional = true }
 
 [features]
-default = []
-async = ["tokio", "async-trait"]
+async           = ["tokio", "async-trait"]
+default         = []
+dns-cache       = []
+nat-detection   = []
+serde           = ["dep:serde"]
 socket-tracking = []
-serde = ["dep:serde"]
-dns-cache = []
-nat-detection = []
 
 [dev-dependencies]
+mockall    = "0.13.1"
 tokio-test = "0.4.4"
-mockall = "0.13.1"
-
-[[example]]
-name = "socket_tracker"
-path = "examples/socket_tracker.rs"
-
-[[example]]
-name = "interface_stats"
-path = "examples/interface_stats.rs"
-
-[[example]]
-name = "bandwidth_monitor"
-path = "examples/bandwidth_monitor.rs"
-
-[[example]]
-name = "dns_config"
-path = "examples/dns_config.rs"
-
-[[example]]
-name = "routing_table"
-path = "examples/routing_table.rs"

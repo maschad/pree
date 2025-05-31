@@ -1,17 +1,16 @@
-use libc::{sockaddr_in, AF_INET, AF_INET6, SOCK_DGRAM, SOCK_STREAM};
-use std::io;
-use std::mem;
-use std::net::{IpAddr, SocketAddr};
-use std::os::raw::{c_int, c_void};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::net::SocketAddr;
+use std::time::Duration;
 
 use crate::types::Protocol;
 
-use crate::types::{ProcessInfo, SocketState};
+use crate::types::SocketState;
 use crate::NetworkError;
 use crate::NetworkResult as Result;
 
 /// Get the system's maximum number of open sockets
+///
+/// # Errors
+/// Returns an error if reading system limits fails
 pub fn get_system_socket_limit() -> Result<usize> {
     #[cfg(target_os = "linux")]
     {
@@ -31,7 +30,7 @@ pub fn get_system_socket_limit() -> Result<usize> {
     {
         use std::process::Command;
         let output = Command::new("sysctl")
-            .args(&["-n", "kern.maxfiles"])
+            .args(["-n", "kern.maxfiles"])
             .output()?;
         let limit = String::from_utf8_lossy(&output.stdout);
         Ok(limit.trim().parse()?)
@@ -43,6 +42,9 @@ pub fn get_system_socket_limit() -> Result<usize> {
 }
 
 /// Get a list of available ports in the system
+///
+/// # Errors
+/// Returns an error if socket information cannot be retrieved
 pub fn get_available_ports() -> Result<Vec<u16>> {
     let sockets = get_sockets_info()?;
     let used_ports: std::collections::HashSet<u16> =
@@ -59,12 +61,18 @@ pub fn get_available_ports() -> Result<Vec<u16>> {
 }
 
 /// Check if a specific port is available for binding
+///
+/// # Errors
+/// Returns an error if socket information cannot be retrieved
 pub fn is_port_available(port: u16) -> Result<bool> {
     let sockets = get_sockets_info()?;
     Ok(!sockets.iter().any(|s| s.local_addr.port() == port))
 }
 
 /// Get the ephemeral port range for the system
+///
+/// # Errors
+/// Returns an error if system port range information cannot be retrieved
 pub fn get_ephemeral_port_range() -> Result<(u16, u16)> {
     #[cfg(target_os = "linux")]
     {
@@ -85,7 +93,7 @@ pub fn get_ephemeral_port_range() -> Result<(u16, u16)> {
     {
         use std::process::Command;
         let output = Command::new("sysctl")
-            .args(&[
+            .args([
                 "-n",
                 "net.inet.ip.portrange.first",
                 "net.inet.ip.portrange.last",
@@ -129,6 +137,10 @@ pub struct SocketInfo {
     pub stats: Option<SocketStats>,
 }
 
+/// Get information about all system sockets
+///
+/// # Errors
+/// Returns an error if socket information cannot be retrieved
 pub fn get_sockets_info() -> Result<Vec<SocketInfo>> {
     #[cfg(target_os = "linux")]
     {
@@ -140,7 +152,7 @@ pub fn get_sockets_info() -> Result<Vec<SocketInfo>> {
     }
     #[cfg(target_os = "macos")]
     {
-        macos::get_sockets_info()
+        Ok(macos::get_sockets_info())
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
@@ -150,6 +162,8 @@ pub fn get_sockets_info() -> Result<Vec<SocketInfo>> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
 
     #[test]
@@ -159,23 +173,24 @@ mod tests {
 
         for socket in sockets {
             if let Some(pid) = socket.process_id {
-                let process_info = match std::env::consts::OS {
-                    "linux" => linux::get_process_info(pid),
-                    "windows" => windows::get_process_info(pid),
-                    "macos" => macos::get_process_info(pid),
-                    _ => None,
-                };
+                #[cfg(target_os = "linux")]
+                let process_info = linux::get_process_info(pid);
+                #[cfg(target_os = "windows")]
+                let process_info = windows::get_process_info(pid);
+                #[cfg(target_os = "macos")]
+                let process_info = macos::get_process_info(pid);
+                #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+                let process_info = None;
 
                 assert!(
                     process_info.is_some(),
-                    "Failed to get process info for PID {}",
-                    pid
+                    "Failed to get process info for PID {pid}"
                 );
                 let info = process_info.unwrap();
 
                 assert_eq!(info.pid, pid);
-                assert!(!info.name.is_empty());
-                assert!(!info.cmdline.is_none());
+                assert!(info.name.as_ref().is_some_and(|n| !n.is_empty()));
+                assert!(info.cmdline.is_some());
 
                 if let Some(start_time) = info.start_time {
                     assert!(start_time <= SystemTime::now());
@@ -183,10 +198,6 @@ mod tests {
 
                 if let Some(memory) = info.memory_usage {
                     assert!(memory > 0);
-                }
-
-                if let Some(cpu) = info.cpu_usage {
-                    assert!(cpu >= 0.0 && cpu <= 100.0);
                 }
             }
         }
@@ -217,7 +228,7 @@ mod tests {
             ));
 
             // Test process info consistency
-            if let Some(_) = socket.process_id {
+            if socket.process_id.is_some() {
                 if let Some(name) = &socket.process_name {
                     assert!(!name.is_empty());
                 }
@@ -232,14 +243,6 @@ mod tests {
 
         for socket in sockets {
             if let Some(stats) = socket.stats {
-                // Test basic stats
-                assert!(stats.bytes_sent >= 0);
-                assert!(stats.bytes_received >= 0);
-                assert!(stats.packets_sent >= 0);
-                assert!(stats.packets_received >= 0);
-                assert!(stats.errors >= 0);
-                assert!(stats.retransmits >= 0);
-
                 // Test TCP-specific stats if available
                 if socket.protocol == Protocol::Tcp {
                     if let Some(rtt) = stats.rtt {
@@ -247,12 +250,6 @@ mod tests {
                     }
                     if let Some(cwnd) = stats.congestion_window {
                         assert!(cwnd > 0);
-                    }
-                    if let Some(send_q) = stats.send_queue_size {
-                        assert!(send_q >= 0);
-                    }
-                    if let Some(recv_q) = stats.receive_queue_size {
-                        assert!(recv_q >= 0);
                     }
                 }
             }
@@ -289,17 +286,13 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         {
-            let sockets = macos::get_sockets_info().unwrap();
+            let sockets = macos::get_sockets_info();
             assert!(!sockets.is_empty());
             for socket in sockets {
                 assert!(socket.local_addr.port() > 0);
                 if let Some(pid) = socket.process_id {
                     let process_info = macos::get_process_info(pid);
                     assert!(process_info.is_some());
-                }
-                if let Some(stats) = socket.stats {
-                    assert!(stats.bytes_sent >= 0);
-                    assert!(stats.bytes_received >= 0);
                 }
             }
         }
@@ -363,13 +356,17 @@ mod linux {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::*;
-    use libc::{
-        c_uchar, c_uint, c_ulong, c_ushort, sockaddr, sockaddr_in, sockaddr_in6, AF_INET, AF_INET6,
-        SOCK_DGRAM, SOCK_STREAM,
-    };
+    use libc::sockaddr_in;
     use std::mem;
+    use std::net::{IpAddr, SocketAddr};
     use std::os::raw::{c_int, c_void};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use crate::error::NetworkError;
+    use crate::types::Protocol;
+    use crate::{ProcessInfo, SocketState};
+
+    use super::{SocketInfo, SocketStats};
 
     // TCP control constants
     const TCPCTL_PCBLIST: c_int = 1;
@@ -377,14 +374,14 @@ mod macos {
 
     #[repr(C)]
     struct xinpcb {
-        inp_next: *mut xinpcb,
-        inp_prev: *mut xinpcb,
-        inp_socket: *mut xsocket,
-        inp_laddr: sockaddr_in,
-        inp_faddr: sockaddr_in,
-        inp_lport: u16,
-        inp_fport: u16,
-        inp_pid: i32,
+        next: *mut xinpcb,
+        prev: *mut xinpcb,
+        socket: *mut xsocket,
+        laddr: sockaddr_in,
+        faddr: sockaddr_in,
+        lport: u16,
+        fport: u16,
+        pid: i32,
     }
 
     #[repr(C)]
@@ -409,41 +406,41 @@ mod macos {
     // TCP info structure
     #[repr(C)]
     struct TCP_INFO {
-        tcpi_state: u8,
-        tcpi_ca_state: u8,
-        tcpi_retransmits: u8,
-        tcpi_probes: u8,
-        tcpi_backoff: u8,
-        tcpi_options: u8,
-        tcpi_snd_wscale: u8,
-        tcpi_rcv_wscale: u8,
-        tcpi_rto: u32,
-        tcpi_ato: u32,
-        tcpi_snd_mss: u32,
-        tcpi_rcv_mss: u32,
-        tcpi_unacked: u32,
-        tcpi_sacked: u32,
-        tcpi_lost: u32,
-        tcpi_retrans: u32,
-        tcpi_fackets: u32,
-        tcpi_last_data_sent: u32,
-        tcpi_last_ack_sent: u32,
-        tcpi_last_data_recv: u32,
-        tcpi_last_ack_recv: u32,
-        tcpi_pmtu: u32,
-        tcpi_rcv_ssthresh: u32,
-        tcpi_rtt: u32,
-        tcpi_rttvar: u32,
-        tcpi_snd_ssthresh: u32,
-        tcpi_snd_cwnd: u32,
-        tcpi_advmss: u32,
-        tcpi_reordering: u32,
-        tcpi_rcv_rtt: u32,
-        tcpi_rcv_space: u32,
-        tcpi_total_retrans: u32,
+        state: u8,
+        ca_state: u8,
+        retransmits: u8,
+        probes: u8,
+        backoff: u8,
+        options: u8,
+        snd_wscale: u8,
+        rcv_wscale: u8,
+        rto: u32,
+        ato: u32,
+        snd_mss: u32,
+        rcv_mss: u32,
+        unacked: u32,
+        sacked: u32,
+        lost: u32,
+        retrans: u32,
+        fackets: u32,
+        last_data_sent: u32,
+        last_ack_sent: u32,
+        last_data_recv: u32,
+        last_ack_recv: u32,
+        pmtu: u32,
+        rcv_ssthresh: u32,
+        rtt: u32,
+        rttvar: u32,
+        snd_ssthresh: u32,
+        snd_cwnd: u32,
+        advmss: u32,
+        reordering: u32,
+        rcv_rtt: u32,
+        rcv_space: u32,
+        total_retrans: u32,
     }
 
-    pub fn get_sockets_info() -> Result<Vec<SocketInfo>> {
+    pub fn get_sockets_info() -> Vec<SocketInfo> {
         let mut sockets = Vec::new();
 
         // Get TCP sockets
@@ -456,10 +453,11 @@ mod macos {
             sockets.extend(udp_sockets);
         }
 
-        Ok(sockets)
+        sockets
     }
 
-    fn get_tcp_sockets() -> Result<Vec<SocketInfo>> {
+    #[allow(clippy::too_many_lines)]
+    fn get_tcp_sockets() -> Result<Vec<SocketInfo>, NetworkError> {
         let mut size = 0;
         let mut mib = [
             libc::CTL_NET,
@@ -473,7 +471,7 @@ mod macos {
         unsafe {
             if libc::sysctl(
                 mib.as_mut_ptr(),
-                mib.len() as u32,
+                u32::try_from(mib.len()).unwrap(),
                 std::ptr::null_mut(),
                 &mut size,
                 std::ptr::null_mut(),
@@ -481,7 +479,7 @@ mod macos {
             ) != 0
             {
                 return Err(NetworkError::OsError(
-                    io::Error::last_os_error().raw_os_error().unwrap_or(-1),
+                    std::io::Error::last_os_error().raw_os_error().unwrap_or(-1),
                 ));
             }
         }
@@ -491,15 +489,15 @@ mod macos {
         unsafe {
             if libc::sysctl(
                 mib.as_mut_ptr(),
-                mib.len() as u32,
-                buffer.as_mut_ptr() as *mut c_void,
+                u32::try_from(mib.len()).unwrap(),
+                buffer.as_mut_ptr().cast::<c_void>(),
                 &mut size,
                 std::ptr::null_mut(),
                 0,
             ) != 0
             {
                 return Err(NetworkError::OsError(
-                    io::Error::last_os_error().raw_os_error().unwrap_or(-1),
+                    std::io::Error::last_os_error().raw_os_error().unwrap_or(-1),
                 ));
             }
         }
@@ -508,41 +506,37 @@ mod macos {
         let mut offset = 0;
 
         while offset < size {
-            let pcb = unsafe { &*(buffer.as_ptr().add(offset) as *const xinpcb) };
-
+            #[allow(clippy::cast_ptr_alignment)]
+            let pcb = unsafe { &*buffer.as_ptr().add(offset).cast::<xinpcb>() };
             let local_addr = SocketAddr::new(
                 IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
-                    pcb.inp_laddr.sin_addr.s_addr,
+                    pcb.laddr.sin_addr.s_addr,
                 ))),
-                u16::from_be(pcb.inp_lport),
+                u16::from_be(pcb.lport),
             );
 
             let remote_addr = SocketAddr::new(
                 IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
-                    pcb.inp_faddr.sin_addr.s_addr,
+                    pcb.faddr.sin_addr.s_addr,
                 ))),
-                u16::from_be(pcb.inp_fport),
+                u16::from_be(pcb.fport),
             );
 
-            let socket = unsafe { &*pcb.inp_socket };
+            let socket = unsafe { &*pcb.socket.cast::<xsocket>() };
             let state = match socket.so_state {
                 TCP_ESTABLISHED => SocketState::Established,
-                TCP_SYN_SENT => SocketState::Connecting,
-                TCP_SYN_RECV => SocketState::Connecting,
-                TCP_FIN_WAIT1 => SocketState::Closing,
-                TCP_FIN_WAIT2 => SocketState::Closing,
-                TCP_TIME_WAIT => SocketState::Closing,
+                TCP_SYN_SENT | TCP_SYN_RECV => SocketState::Connecting,
+                TCP_FIN_WAIT1 | TCP_FIN_WAIT2 | TCP_TIME_WAIT | TCP_CLOSE_WAIT | TCP_LAST_ACK
+                | TCP_CLOSING => SocketState::Closing,
                 TCP_CLOSE => SocketState::Closed,
-                TCP_CLOSE_WAIT => SocketState::Closing,
-                TCP_LAST_ACK => SocketState::Closing,
                 TCP_LISTEN => SocketState::Listen,
-                TCP_CLOSING => SocketState::Closing,
                 _ => SocketState::Unknown("Unknown TCP state".to_string()),
             };
 
-            let process_info = if pcb.inp_pid > 0 {
+            let process_info = if pcb.pid > 0 {
                 Some(ProcessInfo {
-                    pid: pcb.inp_pid as u32,
+                    #[allow(clippy::cast_sign_loss)]
+                    pid: pcb.pid as u32,
                     name: None,
                     cmdline: None,
                     uid: None,
@@ -562,7 +556,7 @@ mod macos {
                 protocol: Protocol::Tcp,
                 process_id: process_info.clone().map(|info| info.pid),
                 process_name: None,
-                stats: get_socket_stats(pcb.inp_socket),
+                stats: get_socket_stats(pcb.socket),
             });
 
             sockets.push(SocketInfo {
@@ -581,7 +575,7 @@ mod macos {
         Ok(sockets)
     }
 
-    fn get_udp_sockets() -> Result<Vec<SocketInfo>> {
+    fn get_udp_sockets() -> Result<Vec<SocketInfo>, NetworkError> {
         let mut size = 0;
         let mut mib = [
             libc::CTL_NET,
@@ -591,11 +585,11 @@ mod macos {
             0,
         ];
 
-        // Get required buffer size
+        // Get required buffer size from sysctl
         unsafe {
             if libc::sysctl(
                 mib.as_mut_ptr(),
-                mib.len() as u32,
+                u32::try_from(mib.len()).unwrap(),
                 std::ptr::null_mut(),
                 &mut size,
                 std::ptr::null_mut(),
@@ -603,25 +597,25 @@ mod macos {
             ) != 0
             {
                 return Err(NetworkError::OsError(
-                    io::Error::last_os_error().raw_os_error().unwrap_or(-1),
+                    std::io::Error::last_os_error().raw_os_error().unwrap_or(-1),
                 ));
             }
         }
 
-        // Allocate buffer and get socket info
+        // Allocate buffer and get socket info from sysctl
         let mut buffer = vec![0u8; size];
         unsafe {
             if libc::sysctl(
                 mib.as_mut_ptr(),
-                mib.len() as u32,
-                buffer.as_mut_ptr() as *mut c_void,
+                u32::try_from(mib.len()).unwrap(),
+                buffer.as_mut_ptr().cast::<c_void>(),
                 &mut size,
                 std::ptr::null_mut(),
                 0,
             ) != 0
             {
                 return Err(NetworkError::OsError(
-                    io::Error::last_os_error().raw_os_error().unwrap_or(-1),
+                    std::io::Error::last_os_error().raw_os_error().unwrap_or(-1),
                 ));
             }
         }
@@ -630,25 +624,37 @@ mod macos {
         let mut offset = 0;
 
         while offset < size {
-            let pcb = unsafe { &*(buffer.as_ptr().add(offset) as *const xinpcb) };
-
+            #[allow(clippy::cast_ptr_alignment)]
+            let pcb = unsafe { &*buffer.as_ptr().add(offset).cast::<xinpcb>() };
             let local_addr = SocketAddr::new(
                 IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
-                    pcb.inp_laddr.sin_addr.s_addr,
+                    pcb.laddr.sin_addr.s_addr,
                 ))),
-                u16::from_be(pcb.inp_lport),
+                u16::from_be(pcb.lport),
             );
 
             let remote_addr = SocketAddr::new(
                 IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
-                    pcb.inp_faddr.sin_addr.s_addr,
+                    pcb.faddr.sin_addr.s_addr,
                 ))),
-                u16::from_be(pcb.inp_fport),
+                u16::from_be(pcb.fport),
             );
 
-            let process_info = if pcb.inp_pid > 0 {
+            let socket = unsafe { &*pcb.socket.cast::<xsocket>() };
+            let state = match socket.so_state {
+                TCP_ESTABLISHED => SocketState::Established,
+                TCP_SYN_SENT | TCP_SYN_RECV => SocketState::Connecting,
+                TCP_FIN_WAIT1 | TCP_FIN_WAIT2 | TCP_TIME_WAIT | TCP_CLOSE_WAIT | TCP_LAST_ACK
+                | TCP_CLOSING => SocketState::Closing,
+                TCP_CLOSE => SocketState::Closed,
+                TCP_LISTEN => SocketState::Listen,
+                _ => SocketState::Unknown("Unknown TCP state".to_string()),
+            };
+
+            let process_info = if pcb.pid > 0 {
                 Some(ProcessInfo {
-                    pid: pcb.inp_pid as u32,
+                    #[allow(clippy::cast_sign_loss)]
+                    pid: pcb.pid as u32,
                     name: None,
                     cmdline: None,
                     uid: None,
@@ -664,7 +670,7 @@ mod macos {
             sockets.push(SocketInfo {
                 local_addr,
                 remote_addr,
-                state: SocketState::Established, // UDP sockets are always in Established state
+                state,
                 protocol: Protocol::Udp,
                 process_id: process_info.map(|info| info.pid),
                 process_name: None,
@@ -687,34 +693,35 @@ mod macos {
                 socket.so_pcb as i32,
                 libc::IPPROTO_TCP,
                 TCP_INFO,
-                &mut tcp_info as *mut _ as *mut c_void,
-                &mut len as *mut _ as *mut u32,
+                (&raw mut tcp_info).cast::<c_void>(),
+                (&raw mut len).cast::<u32>(),
             ) == 0
             {
                 Some(SocketStats {
-                    bytes_sent: tcp_info.tcpi_snd_cwnd as u64,
-                    bytes_received: tcp_info.tcpi_rcv_mss as u64,
-                    packets_sent: tcp_info.tcpi_snd_ssthresh as u64,
-                    packets_received: tcp_info.tcpi_rcv_ssthresh as u64,
-                    errors: tcp_info.tcpi_retransmits as u64,
-                    retransmits: tcp_info.tcpi_retransmits as u64,
-                    rtt: Some(Duration::from_micros(tcp_info.tcpi_rtt as u64)),
-                    congestion_window: Some(tcp_info.tcpi_snd_cwnd),
-                    send_queue_size: Some(tcp_info.tcpi_snd_mss),
-                    receive_queue_size: Some(tcp_info.tcpi_rcv_mss),
+                    bytes_sent: u64::from(tcp_info.snd_cwnd),
+                    bytes_received: u64::from(tcp_info.rcv_mss),
+                    packets_sent: u64::from(tcp_info.snd_ssthresh),
+                    packets_received: u64::from(tcp_info.rcv_ssthresh),
+                    errors: u64::from(tcp_info.retransmits),
+                    retransmits: u64::from(tcp_info.retransmits),
+                    rtt: Some(Duration::from_micros(u64::from(tcp_info.rtt))),
+                    congestion_window: Some(tcp_info.snd_cwnd),
+                    send_queue_size: Some(tcp_info.snd_mss),
+                    receive_queue_size: Some(tcp_info.rcv_mss),
                 })
             } else {
                 None
             }
         }
     }
-
+    #[allow(clippy::cast_sign_loss)]
+    #[allow(dead_code)]
     pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
         use std::process::Command;
 
         // Get process name using ps
         let output = Command::new("ps")
-            .args(&["-p", &pid.to_string(), "-o", "comm="])
+            .args(["-p", &pid.to_string(), "-o", "comm="])
             .output()
             .ok()?;
 
@@ -722,7 +729,7 @@ mod macos {
 
         // Get user using ps
         let output = Command::new("ps")
-            .args(&["-p", &pid.to_string(), "-o", "user="])
+            .args(["-p", &pid.to_string(), "-o", "user="])
             .output()
             .ok()?;
 
@@ -730,7 +737,7 @@ mod macos {
 
         // Get memory usage using ps
         let output = Command::new("ps")
-            .args(&["-p", &pid.to_string(), "-o", "rss="])
+            .args(["-p", &pid.to_string(), "-o", "rss="])
             .output()
             .ok()?;
 
@@ -742,7 +749,7 @@ mod macos {
 
         // Get CPU usage using ps
         let output = Command::new("ps")
-            .args(&["-p", &pid.to_string(), "-o", "%cpu="])
+            .args(["-p", &pid.to_string(), "-o", "%cpu="])
             .output()
             .ok()?;
 
@@ -753,7 +760,7 @@ mod macos {
 
         // Get process start time using ps
         let output = Command::new("ps")
-            .args(&["-p", &pid.to_string(), "-o", "lstart="])
+            .args(["-p", &pid.to_string(), "-o", "lstart="])
             .output()
             .ok()?;
 
@@ -770,13 +777,18 @@ mod macos {
             uid: None,
             start_time,
             memory_usage,
+            #[allow(clippy::cast_possible_truncation)]
             cpu_usage: cpu_usage.map(|usage| usage as u64),
             user: Some(user),
         })
     }
 
     // Get system-wide socket statistics
-    pub fn get_system_socket_stats() -> Result<SocketStats> {
+    ///
+    /// # Errors
+    /// Returns an error if socket information cannot be retrieved
+    #[allow(dead_code)]
+    pub fn get_system_socket_stats() -> SocketStats {
         let mut stats = SocketStats {
             bytes_sent: 0,
             bytes_received: 0,
@@ -817,7 +829,7 @@ mod macos {
             }
         }
 
-        Ok(stats)
+        stats
     }
 
     // ... rest of macos module implementation ...

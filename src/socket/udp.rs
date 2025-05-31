@@ -18,6 +18,7 @@ pub struct UdpSocket {
 
 impl UdpSocket {
     /// Create a new UDP socket instance
+    #[must_use]
     pub fn new(
         local_addr: SocketAddr,
         remote_addr: Option<SocketAddr>,
@@ -51,6 +52,21 @@ impl UdpSocket {
 }
 
 impl SocketConfig for UdpSocket {
+    fn find_by_local_addr(addr: SocketAddr) -> Result<Option<Self>> {
+        Ok(Socket::list()?
+            .into_iter()
+            .filter(|s| s.protocol == Protocol::Udp)
+            .find(|s| s.local_addr == addr)
+            .map(|socket| Self {
+                local_addr: socket.local_addr,
+                remote_addr: socket.remote_addr,
+                state: SocketState::Established,
+                process_id: socket.process_id,
+                process_name: socket.process_name,
+                process_info: None,
+            }))
+    }
+
     fn list() -> Result<Vec<Self>> {
         Socket::list()?
             .into_iter()
@@ -120,7 +136,7 @@ impl SocketConfig for UdpSocket {
 
 impl From<UdpSocket> for SocketInfo {
     fn from(socket: UdpSocket) -> Self {
-        SocketInfo {
+        Self {
             local_addr: socket.local_addr,
             remote_addr: socket
                 .remote_addr

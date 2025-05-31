@@ -1,3 +1,6 @@
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::cast_precision_loss)]
+
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
@@ -27,29 +30,28 @@ pub enum SocketState {
 
 impl SocketState {
     /// Returns true if the socket is actively handling data
-    pub fn is_active(&self) -> bool {
-        matches!(
-            self,
-            SocketState::Established | SocketState::Listen | SocketState::Bound
-        )
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        matches!(self, Self::Established | Self::Listen | Self::Bound)
     }
 
     /// Returns true if the socket is in a transitional state
-    pub fn is_transitional(&self) -> bool {
-        matches!(self, SocketState::Connecting | SocketState::Closing)
+    #[must_use]
+    pub const fn is_transitional(&self) -> bool {
+        matches!(self, Self::Connecting | Self::Closing)
     }
 }
 
 impl std::fmt::Display for SocketState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SocketState::Listen => write!(f, "LISTEN"),
-            SocketState::Established => write!(f, "ESTABLISHED"),
-            SocketState::Connecting => write!(f, "CONNECTING"),
-            SocketState::Closing => write!(f, "CLOSING"),
-            SocketState::Closed => write!(f, "CLOSED"),
-            SocketState::Bound => write!(f, "BOUND"),
-            SocketState::Unknown(state) => write!(f, "{}", state),
+            Self::Listen => write!(f, "LISTEN"),
+            Self::Established => write!(f, "ESTABLISHED"),
+            Self::Connecting => write!(f, "CONNECTING"),
+            Self::Closing => write!(f, "CLOSING"),
+            Self::Closed => write!(f, "CLOSED"),
+            Self::Bound => write!(f, "BOUND"),
+            Self::Unknown(state) => write!(f, "{state}"),
         }
     }
 }
@@ -77,8 +79,9 @@ pub struct ProcessInfo {
 }
 
 impl ProcessInfo {
-    /// Create a new ProcessInfo with just a PID
-    pub fn new(pid: u32) -> Self {
+    /// Create a new instance with just a PID
+    #[must_use]
+    pub const fn new(pid: u32) -> Self {
         Self {
             pid,
             name: None,
@@ -91,8 +94,9 @@ impl ProcessInfo {
         }
     }
 
-    /// Create a ProcessInfo with PID and name
-    pub fn with_name(pid: u32, name: String) -> Self {
+    /// Create a instance with PID and name
+    #[must_use]
+    pub const fn with_name(pid: u32, name: String) -> Self {
         Self {
             pid,
             name: Some(name),
@@ -125,11 +129,11 @@ pub enum Protocol {
 impl std::fmt::Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Protocol::Tcp => write!(f, "TCP"),
-            Protocol::Udp => write!(f, "UDP"),
-            Protocol::Icmp => write!(f, "ICMP"),
-            Protocol::Raw => write!(f, "RAW"),
-            Protocol::Other(n) => write!(f, "PROTO_{}", n),
+            Self::Tcp => write!(f, "TCP"),
+            Self::Udp => write!(f, "UDP"),
+            Self::Icmp => write!(f, "ICMP"),
+            Self::Raw => write!(f, "RAW"),
+            Self::Other(n) => write!(f, "PROTO_{n}"),
         }
     }
 }
@@ -162,7 +166,8 @@ pub struct InterfaceStats {
 
 impl InterfaceStats {
     /// Calculate the difference between two stats snapshots
-    pub fn diff(&self, other: &InterfaceStats) -> Option<InterfaceStatsDiff> {
+    #[allow(dead_code)]
+    pub fn diff(&self, other: &Self) -> Option<InterfaceStatsDiff> {
         if self.interface != other.interface {
             return None;
         }
@@ -212,6 +217,7 @@ pub struct InterfaceStatsDiff {
 
 impl InterfaceStatsDiff {
     /// Calculate receive bandwidth in bytes per second
+    #[allow(dead_code)]
     pub fn rx_bandwidth_bps(&self) -> f64 {
         if self.duration.as_secs_f64() > 0.0 {
             self.rx_bytes as f64 / self.duration.as_secs_f64()
@@ -221,6 +227,7 @@ impl InterfaceStatsDiff {
     }
 
     /// Calculate transmit bandwidth in bytes per second
+    #[allow(dead_code)]
     pub fn tx_bandwidth_bps(&self) -> f64 {
         if self.duration.as_secs_f64() > 0.0 {
             self.tx_bytes as f64 / self.duration.as_secs_f64()
@@ -230,11 +237,13 @@ impl InterfaceStatsDiff {
     }
 
     /// Calculate total bandwidth in bytes per second
+    #[allow(dead_code)]
     pub fn total_bandwidth_bps(&self) -> f64 {
         self.rx_bandwidth_bps() + self.tx_bandwidth_bps()
     }
 
     /// Calculate receive packet rate per second
+    #[allow(dead_code)]
     pub fn rx_packet_rate(&self) -> f64 {
         if self.duration.as_secs_f64() > 0.0 {
             self.rx_packets as f64 / self.duration.as_secs_f64()
@@ -244,6 +253,7 @@ impl InterfaceStatsDiff {
     }
 
     /// Calculate transmit packet rate per second
+    #[allow(dead_code)]
     pub fn tx_packet_rate(&self) -> f64 {
         if self.duration.as_secs_f64() > 0.0 {
             self.tx_packets as f64 / self.duration.as_secs_f64()
@@ -300,7 +310,7 @@ pub struct IpNetwork {
 }
 
 impl IpNetwork {
-    pub fn new(addr: IpAddr, prefix: u8) -> Self {
+    pub const fn new(addr: IpAddr, prefix: u8) -> Self {
         Self { addr, prefix }
     }
 }
@@ -335,11 +345,11 @@ impl FromStr for IpNetwork {
 pub struct MacAddress([u8; 6]);
 
 impl MacAddress {
-    pub fn new(bytes: [u8; 6]) -> Self {
+    pub const fn new(bytes: [u8; 6]) -> Self {
         Self(bytes)
     }
 
-    pub fn as_bytes(&self) -> &[u8; 6] {
+    pub const fn as_bytes(&self) -> &[u8; 6] {
         &self.0
     }
 }
