@@ -14,7 +14,7 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use network_diagnostics::{TcpSocket, UdpSocket, SocketConfig};
+//! use pree::{TcpSocket, UdpSocket, SocketConfig};
 //!
 //! // List all active TCP connections
 //! let tcp_sockets = TcpSocket::list()?;
