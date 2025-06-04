@@ -316,12 +316,11 @@ mod tests {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(clippy::all)]
 mod linux {
     use super::*;
-    use std::fs::{self, File};
+    use std::fs::File;
     use std::io::{BufRead, BufReader};
-    use std::path::Path;
-    use std::time::{Duration, UNIX_EPOCH};
 
     pub fn get_sockets_info() -> Result<Vec<SocketInfo>> {
         let mut sockets = Vec::new();
