@@ -708,25 +708,25 @@ mod tests {
         }
         #[cfg(target_os = "linux")]
         {
-            let sockets = linux::get_sockets_info();
+            let sockets = linux::get_sockets_info().unwrap();
             assert!(!sockets.is_empty());
             // Even if we don't find our test socket, we should be able to get socket info
             for socket in sockets {
                 assert!(socket.local_addr.port() > 0);
                 if let Some(pid) = socket.process_id {
-                    let process_info = macos::get_process_info(pid);
+                    let process_info = linux::get_process_info(pid);
                     assert!(process_info.is_some());
                 }
             }
         }
         #[cfg(target_os = "windows")]
         {
-            let sockets = windows::get_sockets_info();
+            let sockets = windows::get_sockets_info().unwrap();
             // Even if we don't find our test socket, we should be able to get socket info
             for socket in sockets {
                 assert!(socket.local_addr.port() > 0);
                 if let Some(pid) = socket.process_id {
-                    let process_info = macos::get_process_info(pid);
+                    let process_info = windows::get_process_info(pid);
                     assert!(process_info.is_some());
                 }
             }
@@ -735,14 +735,366 @@ mod tests {
 }
 
 #[cfg(target_os = "linux")]
-#[allow(clippy::all)]
 mod linux {
-    use super::*;
-    use std::fs::File;
+    use super::{
+        Protocol, SocketFamily, SocketInfo,
+        SocketState, SocketStats, SocketType,
+    };
+    use crate::{NetworkError, ProcessInfo};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    #[cfg(feature = "linux-procfs")]
+    use procfs::net::{tcp, tcp6, udp, udp6, TcpNetEntry, TcpState as ProcfsTcpState, UdpNetEntry};
+
+    #[cfg(feature = "linux-procfs")]
+    use procfs::process::{all_processes, FDTarget};
+
+    use libproc::proc_pid;
+    use std::collections::HashMap;
+    use std::fs;
     use std::io::{BufRead, BufReader};
 
-    fn get_tcp_stats(pid: u32, inode: u64) -> Option<SocketStats> {
-        let mut stats = SocketStats {
+    #[cfg(feature = "linux-procfs")]
+    fn convert_tcp_state(state: ProcfsTcpState) -> SocketState {
+        match state {
+            ProcfsTcpState::Established => SocketState::Established,
+            ProcfsTcpState::SynSent => SocketState::Connecting,
+            ProcfsTcpState::SynRecv => SocketState::Connecting,
+            ProcfsTcpState::FinWait1 | ProcfsTcpState::FinWait2 => SocketState::Closing,
+            ProcfsTcpState::TimeWait => SocketState::Closing,
+            ProcfsTcpState::Close => SocketState::Closed,
+            ProcfsTcpState::CloseWait => SocketState::Closing,
+            ProcfsTcpState::LastAck => SocketState::Closing,
+            ProcfsTcpState::Listen => SocketState::Listen,
+            ProcfsTcpState::Closing => SocketState::Closing,
+            ProcfsTcpState::NewSynRecv => SocketState::Connecting,
+        }
+    }
+
+    #[cfg(feature = "linux-procfs")]
+    pub fn get_sockets_info() -> Result<Vec<SocketInfo>, NetworkError> {
+        let mut sockets = Vec::new();
+        let mut inode_to_process = HashMap::new();
+
+        // Build a map of inode to process info
+        if let Ok(processes) = all_processes() {
+            for process in processes.flatten() {
+                if let Ok(fds) = process.fd() {
+                    for fd in fds.flatten() {
+                        if let FDTarget::Socket(inode) = fd.target {
+                            if let Ok(stat) = process.stat() {
+                                inode_to_process.insert(
+                                    inode,
+                                    (stat.pid as u32, stat.comm.clone())
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Get TCP sockets
+        if let Ok(tcp_sockets) = tcp() {
+            for entry in tcp_sockets {
+                if let Some(socket) = process_tcp_entry(entry, &inode_to_process) {
+                    sockets.push(socket);
+                }
+            }
+        }
+
+        // Get TCP6 sockets
+        if let Ok(tcp6_sockets) = tcp6() {
+            for entry in tcp6_sockets {
+                if let Some(socket) = process_tcp_entry(entry, &inode_to_process) {
+                    sockets.push(socket);
+                }
+            }
+        }
+
+        // Get UDP sockets
+        if let Ok(udp_sockets) = udp() {
+            for entry in udp_sockets {
+                if let Some(socket) = process_udp_entry(entry, &inode_to_process) {
+                    sockets.push(socket);
+                }
+            }
+        }
+
+        // Get UDP6 sockets
+        if let Ok(udp6_sockets) = udp6() {
+            for entry in udp6_sockets {
+                if let Some(socket) = process_udp_entry(entry, &inode_to_process) {
+                    sockets.push(socket);
+                }
+            }
+        }
+
+        Ok(sockets)
+    }
+
+    #[cfg(not(feature = "linux-procfs"))]
+    pub fn get_sockets_info() -> Result<Vec<SocketInfo>, NetworkError> {
+        // Fallback implementation using direct /proc parsing
+        let mut sockets = Vec::new();
+        let inode_to_process = build_inode_to_process_map()?;
+
+        // Parse TCP sockets
+        sockets.extend(parse_socket_file("/proc/net/tcp", Protocol::Tcp, &inode_to_process)?);
+        sockets.extend(parse_socket_file("/proc/net/tcp6", Protocol::Tcp, &inode_to_process)?);
+
+        // Parse UDP sockets
+        sockets.extend(parse_socket_file("/proc/net/udp", Protocol::Udp, &inode_to_process)?);
+        sockets.extend(parse_socket_file("/proc/net/udp6", Protocol::Udp, &inode_to_process)?);
+
+        Ok(sockets)
+    }
+
+    #[cfg(feature = "linux-procfs")]
+    fn process_tcp_entry(
+        entry: TcpNetEntry,
+        inode_to_process: &HashMap<u64, (u32, String)>,
+    ) -> Option<SocketInfo> {
+        let (process_id, process_name) = inode_to_process
+            .get(&entry.inode)
+            .map(|(pid, name)| (Some(*pid), Some(name.clone())))
+            .unwrap_or((None, None));
+
+        let socket_family = if entry.local_address.is_ipv4() {
+            SocketFamily::Inet
+        } else {
+            SocketFamily::Inet6
+        };
+
+        // Get TCP stats
+        let stats = if let Some(pid) = process_id {
+            get_tcp_stats(pid, entry.inode)
+        } else {
+            None
+        };
+
+        Some(SocketInfo {
+            local_addr: entry.local_address,
+            remote_addr: entry.remote_address,
+            state: convert_tcp_state(entry.state),
+            protocol: Protocol::Tcp,
+            process_id,
+            process_name,
+            stats,
+            socket_type: Some(SocketType::Stream),
+            socket_family: Some(socket_family),
+            socket_flags: None,
+            socket_options: None,
+        })
+    }
+
+    #[cfg(feature = "linux-procfs")]
+    fn process_udp_entry(
+        entry: UdpNetEntry,
+        inode_to_process: &HashMap<u64, (u32, String)>,
+    ) -> Option<SocketInfo> {
+        let (process_id, process_name) = inode_to_process
+            .get(&entry.inode)
+            .map(|(pid, name)| (Some(*pid), Some(name.clone())))
+            .unwrap_or((None, None));
+
+        let socket_family = if entry.local_address.is_ipv4() {
+            SocketFamily::Inet
+        } else {
+            SocketFamily::Inet6
+        };
+
+        Some(SocketInfo {
+            local_addr: entry.local_address,
+            remote_addr: entry.remote_address,
+            state: SocketState::Established, // UDP is connectionless
+            protocol: Protocol::Udp,
+            process_id,
+            process_name,
+            stats: None, // UDP doesn't have detailed stats like TCP
+            socket_type: Some(SocketType::Datagram),
+            socket_family: Some(socket_family),
+            socket_flags: None,
+            socket_options: None,
+        })
+    }
+
+    fn build_inode_to_process_map() -> Result<HashMap<u64, (u32, String)>, NetworkError> {
+        let mut map = HashMap::new();
+
+        // Iterate through all processes
+        for entry in fs::read_dir("/proc")? {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let file_name_str = file_name.to_string_lossy();
+
+            // Check if this is a process directory (numeric name)
+            if let Ok(pid) = file_name_str.parse::<u32>() {
+                // Try to read the process's file descriptors
+                let fd_path = format!("/proc/{}/fd", pid);
+                if let Ok(fd_dir) = fs::read_dir(&fd_path) {
+                    for fd_entry in fd_dir.flatten() {
+                        if let Ok(link) = fs::read_link(fd_entry.path()) {
+                            let link_str = link.to_string_lossy();
+                            if let Some(inode) = extract_socket_inode(&link_str) {
+                                // Get process name
+                                let comm_path = format!("/proc/{}/comm", pid);
+                                let name = fs::read_to_string(comm_path)
+                                    .unwrap_or_default()
+                                    .trim()
+                                    .to_string();
+                                map.insert(inode, (pid, name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(map)
+    }
+
+    fn extract_socket_inode(link: &str) -> Option<u64> {
+        if link.starts_with("socket:[") && link.ends_with(']') {
+            link[8..link.len() - 1].parse().ok()
+        } else {
+            None
+        }
+    }
+
+    fn parse_socket_file(
+        path: &str,
+        protocol: Protocol,
+        inode_to_process: &HashMap<u64, (u32, String)>,
+    ) -> Result<Vec<SocketInfo>, NetworkError> {
+        let mut sockets = Vec::new();
+
+        let file = fs::File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut lines_iter = reader.lines();
+
+        // Skip header
+        lines_iter.next();
+
+        for line in lines_iter.flatten() {
+            if let Some(socket) = parse_socket_line(&line, protocol, inode_to_process) {
+                sockets.push(socket);
+            }
+        }
+
+        Ok(sockets)
+    }
+
+    fn parse_socket_line(
+        line: &str,
+        protocol: Protocol,
+        inode_to_process: &HashMap<u64, (u32, String)>,
+    ) -> Option<SocketInfo> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 10 {
+            return None;
+        }
+
+        // Parse addresses
+        let local_addr = parse_hex_address(parts[1])?;
+        let remote_addr = parse_hex_address(parts[2])?;
+
+        // Parse state (for TCP)
+        let state = if protocol == Protocol::Tcp {
+            match u8::from_str_radix(parts[3], 16).ok()? {
+                0x01 => SocketState::Established,
+                0x02 => SocketState::Connecting,
+                0x03 => SocketState::Connecting,
+                0x04 => SocketState::Closing,
+                0x05 => SocketState::Closing,
+                0x06 => SocketState::Closing,
+                0x07 => SocketState::Closed,
+                0x08 => SocketState::Closing,
+                0x09 => SocketState::Closing,
+                0x0A => SocketState::Listen,
+                0x0B => SocketState::Closing,
+                _ => SocketState::Unknown("Unknown state".to_string()),
+            }
+        } else {
+            SocketState::Established
+        };
+
+        // Parse inode
+        let inode = parts[9].parse::<u64>().ok()?;
+
+        // Get process info
+        let (process_id, process_name) = inode_to_process
+            .get(&inode)
+            .map(|(pid, name)| (Some(*pid), Some(name.clone())))
+            .unwrap_or((None, None));
+
+        // Get stats for TCP
+        let stats = if protocol == Protocol::Tcp {
+            process_id.and_then(|pid| get_tcp_stats(pid, inode))
+        } else {
+            None
+        };
+
+        // Determine socket family
+        let socket_family = match local_addr {
+            SocketAddr::V4(_) => SocketFamily::Inet,
+            SocketAddr::V6(_) => SocketFamily::Inet6,
+        };
+
+        // Determine socket type
+        let socket_type = match protocol {
+            Protocol::Tcp => SocketType::Stream,
+            Protocol::Udp => SocketType::Datagram,
+            _ => return None,
+        };
+
+        Some(SocketInfo {
+            local_addr,
+            remote_addr,
+            state,
+            protocol,
+            process_id,
+            process_name,
+            stats,
+            socket_type: Some(socket_type),
+            socket_family: Some(socket_family),
+            socket_flags: None,
+            socket_options: None,
+        })
+    }
+
+    fn parse_hex_address(hex_addr: &str) -> Option<SocketAddr> {
+        let parts: Vec<&str> = hex_addr.split(':').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let port = u16::from_str_radix(parts[1], 16).ok()?;
+
+        // Check if IPv4 or IPv6
+        if parts[0].len() == 8 {
+            // IPv4
+            let addr_bytes = u32::from_str_radix(parts[0], 16).ok()?;
+            let addr = Ipv4Addr::from(addr_bytes.to_be());
+            Some(SocketAddr::new(IpAddr::V4(addr), port))
+        } else if parts[0].len() == 32 {
+            // IPv6
+            let mut bytes = [0u8; 16];
+            for (i, chunk) in parts[0].as_bytes().chunks(2).enumerate() {
+                let hex_str = std::str::from_utf8(chunk).ok()?;
+                bytes[i] = u8::from_str_radix(hex_str, 16).ok()?;
+            }
+            let addr = Ipv6Addr::from(bytes);
+            Some(SocketAddr::new(IpAddr::V6(addr), port))
+        } else {
+            None
+        }
+    }
+
+    fn get_tcp_stats(_pid: u32, _inode: u64) -> Option<SocketStats> {
+        // Try to read detailed TCP info from /proc/net/tcp_info if available
+        // For now, return basic stats
+        Some(SocketStats {
             bytes_sent: 0,
             bytes_received: 0,
             packets_sent: 0,
@@ -779,196 +1131,60 @@ mod linux {
             connection_duration: None,
             connection_quality_score: None,
             state_history: Vec::new(),
-        };
-
-        // Read TCP stats from /proc/net/tcp
-        if let Ok(file) = File::open("/proc/net/tcp") {
-            let reader = BufReader::new(file);
-            for line in reader.lines().skip(1) {
-                if let Ok(line) = line {
-                    if let Some(socket_stats) = parse_tcp_stats_line(&line, inode) {
-                        stats = socket_stats;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Read additional TCP stats from /proc/<pid>/net/tcp
-        if let Ok(file) = File::open(format!("/proc/{}/net/tcp", pid)) {
-            let reader = BufReader::new(file);
-            for line in reader.lines().skip(1) {
-                if let Ok(line) = line {
-                    if let Some(socket_stats) = parse_tcp_stats_line(&line, inode) {
-                        // Update stats with process-specific information
-                        stats.bytes_sent = socket_stats.bytes_sent;
-                        stats.bytes_received = socket_stats.bytes_received;
-                        stats.packets_sent = socket_stats.packets_sent;
-                        stats.packets_received = socket_stats.packets_received;
-                        stats.retransmits = socket_stats.retransmits;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Read TCP memory stats from /proc/net/sockstat
-        if let Ok(file) = File::open("/proc/net/sockstat") {
-            let reader = BufReader::new(file);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    if line.starts_with("TCP:") {
-                        if let Some((send_queue, receive_queue)) = parse_sockstat_line(&line) {
-                            stats.send_queue_size = Some(send_queue);
-                            stats.receive_queue_size = Some(receive_queue);
-                        }
-                    }
-                }
-            }
-        }
-
-        Some(stats)
+        })
     }
 
-    fn parse_tcp_stats_line(line: &str, target_inode: u64) -> Option<SocketStats> {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 17 {
-            return None;
+    pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
+        // Try using libproc first
+        if let Ok(path) = proc_pid::pidpath(pid as i32) {
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
+
+            // Read additional info from /proc
+            let cmdline_path = format!("/proc/{}/cmdline", pid);
+
+            let cmdline = fs::read_to_string(cmdline_path)
+                .ok()
+                .map(|s| s.replace('\0', " ").trim().to_string());
+
+            let uid = fs::read_to_string(format!("/proc/{}/status", pid))
+                .ok()
+                .and_then(|content| {
+                    content
+                        .lines()
+                        .find(|line| line.starts_with("Uid:"))
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .and_then(|uid_str| uid_str.parse().ok())
+                });
+
+            // Get memory usage from status file
+            let memory_usage = fs::read_to_string(format!("/proc/{}/status", pid))
+                .ok()
+                .and_then(|content| {
+                    content
+                        .lines()
+                        .find(|line| line.starts_with("VmRSS:"))
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .and_then(|mem_str| mem_str.parse::<u64>().ok())
+                        .map(|kb| kb * 1024) // Convert KB to bytes
+                });
+
+            return Some(ProcessInfo {
+                pid,
+                name,
+                cmdline,
+                uid,
+                start_time: None,
+                memory_usage,
+                cpu_usage: None,
+                user: None,
+            });
         }
 
-        // Extract inode
-        let inode = parts[9].parse::<u64>().ok()?;
-        if inode != target_inode {
-            return None;
-        }
-
-        let mut stats = SocketStats {
-            bytes_sent: 0,
-            bytes_received: 0,
-            packets_sent: 0,
-            packets_received: 0,
-            errors: 0,
-            retransmits: 0,
-            rtt: None,
-            congestion_window: None,
-            send_queue_size: None,
-            receive_queue_size: None,
-            slow_start_threshold: None,
-            send_window: None,
-            receive_window: None,
-            rtt_variance: None,
-            min_rtt: None,
-            max_rtt: None,
-            rtt_samples: None,
-            retransmit_timeout: None,
-            snd_mss: None,
-            rcv_mss: None,
-            snd_una: None,
-            snd_nxt: None,
-            rcv_nxt: None,
-            congestion_control: None,
-            congestion_state: None,
-            sack_enabled: false,
-            ecn_enabled: false,
-            ecn_ce_count: None,
-            sack_blocks: None,
-            sack_reordering: None,
-            out_of_order_packets: None,
-            duplicate_acks: None,
-            zero_window_events: None,
-            connection_duration: None,
-        };
-
-        // Parse TCP stats
-        if let (Ok(send_queue), Ok(receive_queue)) =
-            (parts[4].parse::<u32>(), parts[5].parse::<u32>())
-        {
-            stats.send_queue_size = Some(send_queue);
-            stats.receive_queue_size = Some(receive_queue);
-        }
-
-        if let (Ok(snd_una), Ok(snd_nxt)) = (parts[10].parse::<u32>(), parts[11].parse::<u32>()) {
-            stats.snd_una = Some(snd_una);
-            stats.snd_nxt = Some(snd_nxt);
-        }
-
-        if let (Ok(rcv_nxt), Ok(rcv_mss)) = (parts[12].parse::<u32>(), parts[13].parse::<u32>()) {
-            stats.rcv_nxt = Some(rcv_nxt);
-            stats.rcv_mss = Some(rcv_mss);
-            stats.snd_mss = Some(rcv_mss); // MSS is same for both directions
-        }
-
-        if let (Ok(rtt), Ok(rttvar)) = (parts[14].parse::<u32>(), parts[15].parse::<u32>()) {
-            stats.rtt = Some(Duration::from_micros(rtt as u64));
-            stats.rtt_variance = Some(Duration::from_micros(rttvar as u64));
-        }
-
-        if let Ok(cwnd) = parts[16].parse::<u32>() {
-            stats.congestion_window = Some(cwnd);
-        }
-
-        Some(stats)
+        None
     }
-
-    fn parse_sockstat_line(line: &str) -> Option<(u32, u32)> {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 {
-            return None;
-        }
-
-        let send_queue = parts[2].parse::<u32>().ok()?;
-        let receive_queue = parts[3].parse::<u32>().ok()?;
-
-        Some((send_queue, receive_queue))
-    }
-
-    pub fn get_sockets_info() -> Result<Vec<SocketInfo>> {
-        let mut sockets = Vec::new();
-
-        // Read TCP sockets from /proc/net/tcp
-        if let Ok(file) = File::open("/proc/net/tcp") {
-            let reader = BufReader::new(file);
-            for line in reader.lines().skip(1) {
-                if let Ok(line) = line {
-                    if let Some(mut socket) = parse_tcp_line(&line) {
-                        // Get process info from inode
-                        if let Some(inode) = get_inode_from_line(&line) {
-                            if let Some((pid, name)) = get_process_from_inode(inode) {
-                                socket.process_id = Some(pid);
-                                socket.process_name = Some(name);
-                                // Get TCP stats
-                                socket.stats = get_tcp_stats(pid, inode);
-                            }
-                        }
-                        sockets.push(socket);
-                    }
-                }
-            }
-        }
-
-        // Read UDP sockets from /proc/net/udp
-        if let Ok(file) = File::open("/proc/net/udp") {
-            let reader = BufReader::new(file);
-            for line in reader.lines().skip(1) {
-                if let Ok(line) = line {
-                    if let Some(mut socket) = parse_udp_line(&line) {
-                        // Get process info from inode
-                        if let Some(inode) = get_inode_from_line(&line) {
-                            if let Some((pid, name)) = get_process_from_inode(inode) {
-                                socket.process_id = Some(pid);
-                                socket.process_name = Some(name);
-                            }
-                        }
-                        sockets.push(socket);
-                    }
-                }
-            }
-        }
-
-        Ok(sockets)
-    }
-
-    // ... rest of linux module implementation ...
 }
 
 #[cfg(target_os = "windows")]
@@ -1128,7 +1344,7 @@ mod windows {
             let output = String::from_utf8_lossy(&output.stdout);
             for line in output.lines().skip(4) {
                 // Skip header lines
-                if let Some(mut socket) = parse_netstat_line(line) {
+                if let Some(mut socket) = parse_socket_line(line) {
                     // Get process info
                     if let Some((pid, name)) = get_process_info_from_line(line) {
                         socket.process_id = Some(pid);
@@ -1145,7 +1361,89 @@ mod windows {
 
         Ok(sockets)
     }
-    // ... rest of the implementation ...
+
+    fn parse_socket_line(line: &str) -> Option<SocketInfo> {
+        // Simple parser for Windows netstat output
+        // Format: Proto  Local Address          Foreign Address        State           PID
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 5 {
+            return None;
+        }
+
+        // Parse addresses
+        let local_addr = parse_address(parts[1])?;
+        let remote_addr = parse_address(parts[2])?;
+
+        // Parse state
+        let state = match parts[3].to_uppercase().as_str() {
+            "ESTABLISHED" => SocketState::Established,
+            "LISTENING" => SocketState::Listen,
+            "SYN_SENT" | "SYN_RECV" => SocketState::Connecting,
+            "CLOSE_WAIT" | "FIN_WAIT1" | "FIN_WAIT2" | "TIME_WAIT" | "LAST_ACK" | "CLOSING" => {
+                SocketState::Closing
+            }
+            "CLOSED" => SocketState::Closed,
+            _ => SocketState::Unknown(parts[3].to_string()),
+        };
+
+        Some(SocketInfo {
+            local_addr,
+            remote_addr,
+            state,
+            protocol: Protocol::Tcp,
+            process_id: None, // Will be filled by get_process_info_from_line
+            process_name: None,
+            stats: None,
+            socket_type: Some(SocketType::Stream),
+            socket_family: Some(if local_addr.is_ipv4() {
+                SocketFamily::Inet
+            } else {
+                SocketFamily::Inet6
+            }),
+            socket_flags: None,
+            socket_options: None,
+        })
+    }
+
+    fn parse_address(addr: &str) -> Option<SocketAddr> {
+        // Parse Windows netstat address format (e.g., "127.0.0.1:80" or "[::1]:80")
+        addr.parse().ok()
+    }
+
+    fn get_process_info_from_line(line: &str) -> Option<(u32, String)> {
+        // Extract PID from netstat output
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 5 {
+            if let Ok(pid) = parts[4].parse::<u32>() {
+                // TODO: Get process name from PID using Windows API
+                return Some((pid, format!("Process_{}", pid)));
+            }
+        }
+        None
+    }
+
+    fn get_local_addr_from_line(line: &str) -> Option<SocketAddr> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            parse_address(parts[1])
+        } else {
+            None
+        }
+    }
+
+    pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
+        // TODO: Implement using Windows API
+        Some(ProcessInfo {
+            pid,
+            name: Some(format!("Process_{}", pid)),
+            cmdline: None,
+            uid: None,
+            start_time: None,
+            memory_usage: None,
+            cpu_usage: None,
+            user: None,
+        })
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1154,21 +1452,19 @@ mod macos {
         Protocol, SocketFamily, SocketInfo, SocketOptions, SocketState, SocketStats, SocketType,
     };
     use crate::ProcessInfo;
-    use std::net::{IpAddr, SocketAddr};
-    use std::process::Command;
-    use std::str::FromStr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::time::{Duration, SystemTime};
+
+    use libproc::file_info::{pidfdinfo, ListFDs, ProcFDType};
+    use libproc::net_info::{SocketFDInfo, SocketInfoKind};
+    use libproc::proc_pid::{pidinfo, PidInfo, TaskAllInfo};
+    use libproc::processes::{pids_by_type, ProcFilter};
 
     fn get_tcp_stats(pid: u32, local_addr: &SocketAddr) -> Option<SocketStats> {
-        // Get detailed TCP stats using netstat
-        let output = Command::new("netstat")
-            .args([
-                "-an", "-p", "tcp", "-v", "-s", // Show statistics
-            ])
-            .output()
-            .ok()?;
-
-        let output = String::from_utf8_lossy(&output.stdout);
-        let mut stats = SocketStats {
+        // Create a basic stats structure
+        // Note: libproc on macOS doesn't provide as detailed TCP statistics as Linux
+        // We'll populate what we can
+        let stats = SocketStats {
             bytes_sent: 0,
             bytes_received: 0,
             packets_sent: 0,
@@ -1207,137 +1503,28 @@ mod macos {
             state_history: Vec::new(),
         };
 
-        // Parse netstat output for TCP statistics
-        for line in output.lines() {
-            if line.contains("segments sent") {
-                if let Some(num) = extract_number(line) {
-                    stats.packets_sent = num;
-                }
-            } else if line.contains("segments received") {
-                if let Some(num) = extract_number(line) {
-                    stats.packets_received = num;
-                }
-            } else if line.contains("bytes sent") {
-                if let Some(num) = extract_number(line) {
-                    stats.bytes_sent = num;
-                }
-            } else if line.contains("bytes received") {
-                if let Some(num) = extract_number(line) {
-                    stats.bytes_received = num;
-                }
-            } else if line.contains("retransmit") {
-                if let Some(num) = extract_number(line) {
-                    stats.retransmits = num;
-                }
-            }
-        }
-
-        // Get per-socket TCP stats using lsof
-        if let Ok(output) = Command::new("lsof")
-            .args([
-                "-p",
-                &pid.to_string(),
-                "-i",
-                &format!("{}:{}", local_addr.ip(), local_addr.port()),
-                "-F",
-                "n",
-            ])
-            .output()
-        {
-            let output = String::from_utf8_lossy(&output.stdout);
-            for line in output.lines() {
-                if let Some(flags) = line.strip_prefix("n") {
-                    // Parse TCP flags and window information
-                    if let Some(window) = extract_window_size(flags) {
-                        stats.send_window = Some(window);
-                    }
-                    if let Some(mss) = extract_mss(flags) {
-                        stats.snd_mss = Some(mss);
-                        stats.rcv_mss = Some(mss);
-                    }
-                }
-            }
-        }
-
         Some(stats)
-    }
-
-    fn extract_number(line: &str) -> Option<u64> {
-        line.split_whitespace()
-            .find(|s| s.chars().all(|c| c.is_ascii_digit()))
-            .and_then(|s| s.parse().ok())
-    }
-
-    fn extract_window_size(flags: &str) -> Option<u32> {
-        // Look for window size in flags
-        flags
-            .split_whitespace()
-            .find(|s| s.starts_with('w'))
-            .and_then(|s| s[1..].parse().ok())
-    }
-
-    fn extract_mss(flags: &str) -> Option<u32> {
-        // Look for MSS in flags
-        flags
-            .split_whitespace()
-            .find(|s| s.starts_with('m'))
-            .and_then(|s| s[1..].parse().ok())
     }
 
     pub fn get_sockets_info() -> Vec<SocketInfo> {
         let mut sockets = Vec::new();
 
-        // Get TCP sockets using netstat with extended info
-        if let Ok(output) = Command::new("netstat")
-            .args(["-an", "-p", "tcp", "-v"])
-            .output()
-        {
-            let output = String::from_utf8_lossy(&output.stdout);
-            for line in output.lines().skip(2) {
-                if let Some(socket) = parse_netstat_line(line, Protocol::Tcp) {
-                    sockets.push(socket);
-                }
-            }
-        }
-
-        // Get UDP sockets using netstat with extended info
-        if let Ok(output) = Command::new("netstat")
-            .args(["-an", "-p", "udp", "-v"])
-            .output()
-        {
-            let output = String::from_utf8_lossy(&output.stdout);
-            for line in output.lines().skip(2) {
-                if let Some(socket) = parse_netstat_line(line, Protocol::Udp) {
-                    sockets.push(socket);
-                }
-            }
-        }
-
-        // Get socket options using lsof
-        for socket in &mut sockets {
-            if let Some(pid) = socket.process_id {
-                if let Ok(output) = Command::new("lsof")
-                    .args([
-                        "-p",
-                        &pid.to_string(),
-                        "-i",
-                        &format!("{}:{}", socket.local_addr.ip(), socket.local_addr.port()),
-                        "-F",
-                        "n",
-                    ])
-                    .output()
-                {
-                    let output = String::from_utf8_lossy(&output.stdout);
-                    socket.socket_options = Some(parse_socket_options(&output));
-                }
-            }
-        }
-
-        // Get TCP stats for each socket
-        for socket in &mut sockets {
-            if let Some(pid) = socket.process_id {
-                if socket.protocol == Protocol::Tcp {
-                    socket.stats = get_tcp_stats(pid, &socket.local_addr);
+        // Get all process IDs
+        if let Ok(pids) = pids_by_type(ProcFilter::All) {
+            for pid in pids {
+                // Get file descriptors for this process
+                if let Ok(fds) = pidinfo::<ListFDs>(pid as i32, 0) {
+                    for fd in fds {
+                        // Check if this is a socket
+                        if let ProcFDType::Socket = fd.proc_fdtype {
+                            // Get detailed socket information
+                            if let Ok(socket_info) = pidfdinfo::<SocketFDInfo>(pid as i32, fd.proc_fd) {
+                                if let Some(socket) = process_socket_info(pid, fd.proc_fd, socket_info) {
+                                    sockets.push(socket);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1345,8 +1532,112 @@ mod macos {
         sockets
     }
 
-    fn parse_socket_options(output: &str) -> SocketOptions {
-        let mut options = SocketOptions {
+    fn process_socket_info(pid: u32, fd: i32, socket_info: SocketFDInfo) -> Option<SocketInfo> {
+        let (protocol, local_addr, remote_addr, state, socket_family) = match socket_info.psi {
+            SocketInfoKind::In(info) => {
+                let protocol = match info.soi_protocol {
+                    libc::IPPROTO_TCP => Protocol::Tcp,
+                    libc::IPPROTO_UDP => Protocol::Udp,
+                    _ => return None,
+                };
+
+                let local_addr = SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::from(u32::from_be(info.soi_proto.pri_in.insi_laddr.s_addr))),
+                    u16::from_be(info.soi_proto.pri_in.insi_lport),
+                );
+
+                let remote_addr = SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::from(u32::from_be(info.soi_proto.pri_in.insi_faddr.s_addr))),
+                    u16::from_be(info.soi_proto.pri_in.insi_fport),
+                );
+
+                let state = match info.soi_proto.pri_tcp.tcpsi_state {
+                    libc::TCPS_CLOSED => SocketState::Closed,
+                    libc::TCPS_LISTEN => SocketState::Listen,
+                    libc::TCPS_SYN_SENT | libc::TCPS_SYN_RECEIVED => SocketState::Connecting,
+                    libc::TCPS_ESTABLISHED => SocketState::Established,
+                    libc::TCPS_CLOSE_WAIT | libc::TCPS_FIN_WAIT_1 | libc::TCPS_FIN_WAIT_2
+                    | libc::TCPS_LAST_ACK | libc::TCPS_CLOSING | libc::TCPS_TIME_WAIT => SocketState::Closing,
+                    _ => SocketState::Unknown("Unknown TCP state".to_string()),
+                };
+
+                (protocol, local_addr, remote_addr, state, SocketFamily::Inet)
+            }
+            SocketInfoKind::In6(info) => {
+                let protocol = match info.soi_protocol {
+                    libc::IPPROTO_TCP => Protocol::Tcp,
+                    libc::IPPROTO_UDP => Protocol::Udp,
+                    _ => return None,
+                };
+
+                // Convert IPv6 address
+                let local_addr_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        info.soi_proto.pri_in6.in6si_laddr.s6_addr.as_ptr(),
+                        16,
+                    )
+                };
+                let local_addr = SocketAddr::new(
+                    IpAddr::V6(Ipv6Addr::from(*<&[u8; 16]>::try_from(local_addr_bytes).ok()?)),
+                    u16::from_be(info.soi_proto.pri_in6.in6si_lport),
+                );
+
+                let remote_addr_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        info.soi_proto.pri_in6.in6si_faddr.s6_addr.as_ptr(),
+                        16,
+                    )
+                };
+                let remote_addr = SocketAddr::new(
+                    IpAddr::V6(Ipv6Addr::from(*<&[u8; 16]>::try_from(remote_addr_bytes).ok()?)),
+                    u16::from_be(info.soi_proto.pri_in6.in6si_fport),
+                );
+
+                let state = if protocol == Protocol::Tcp {
+                    match info.soi_proto.pri_tcp.tcpsi_state {
+                        libc::TCPS_CLOSED => SocketState::Closed,
+                        libc::TCPS_LISTEN => SocketState::Listen,
+                        libc::TCPS_SYN_SENT | libc::TCPS_SYN_RECEIVED => SocketState::Connecting,
+                        libc::TCPS_ESTABLISHED => SocketState::Established,
+                        libc::TCPS_CLOSE_WAIT | libc::TCPS_FIN_WAIT_1 | libc::TCPS_FIN_WAIT_2
+                        | libc::TCPS_LAST_ACK | libc::TCPS_CLOSING | libc::TCPS_TIME_WAIT => SocketState::Closing,
+                        _ => SocketState::Unknown("Unknown TCP state".to_string()),
+                    }
+                } else {
+                    SocketState::Established // UDP sockets are always "established"
+                };
+
+                (protocol, local_addr, remote_addr, state, SocketFamily::Inet6)
+            }
+            SocketInfoKind::Un(_) => {
+                // Unix domain sockets - skip for now as we're focusing on network sockets
+                return None;
+            }
+            _ => return None,
+        };
+
+        // Get process name
+        let (process_name, start_time) = if let Ok(info) = pidinfo::<TaskAllInfo>(pid as i32, 0) {
+            let name = unsafe {
+                std::ffi::CStr::from_ptr(info.pbsd.pbi_comm.as_ptr())
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let start_time = SystemTime::UNIX_EPOCH + Duration::from_secs(info.pbsd.pbi_start_tvsec as u64);
+            (Some(name), Some(start_time))
+        } else {
+            (None, None)
+        };
+
+        // Determine socket type
+        let socket_type = match protocol {
+            Protocol::Tcp => Some(SocketType::Stream),
+            Protocol::Udp => Some(SocketType::Datagram),
+            _ => None,
+        };
+
+        // Get socket options (basic defaults for now)
+        let socket_options = Some(SocketOptions {
             keep_alive: false,
             reuse_address: false,
             broadcast: false,
@@ -1354,84 +1645,13 @@ mod macos {
             send_buffer_size: None,
             ttl: None,
             linger: None,
-        };
+        });
 
-        for line in output.lines() {
-            if let Some(flags) = line.strip_prefix("n") {
-                options.keep_alive = flags.contains('K');
-                options.reuse_address = flags.contains('R');
-                options.broadcast = flags.contains('B');
-            }
-        }
-
-        options
-    }
-
-    fn parse_netstat_line(line: &str, protocol: Protocol) -> Option<SocketInfo> {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 {
-            return None;
-        }
-
-        // Parse local address
-        let local_addr = parse_address(parts[3])?;
-
-        // Parse remote address (if connected)
-        let remote_addr = if parts.len() > 4 {
-            parse_address(parts[4])
-                .unwrap_or_else(|| SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0))
+        // Get TCP stats if applicable
+        let stats = if protocol == Protocol::Tcp {
+            get_tcp_stats(pid, &local_addr)
         } else {
-            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
-        };
-
-        // Determine socket type and family
-        let socket_type = match protocol {
-            Protocol::Tcp => Some(SocketType::Stream),
-            Protocol::Udp => Some(SocketType::Datagram),
-            _ => None,
-        };
-
-        let socket_family = match local_addr {
-            SocketAddr::V4(_) => Some(SocketFamily::Inet),
-            SocketAddr::V6(_) => Some(SocketFamily::Inet6),
-        };
-
-        // Determine state
-        let state = if protocol == Protocol::Tcp {
-            parts.get(5).map(|s| s.to_lowercase()).map_or_else(
-                || SocketState::Unknown("No state information".to_string()),
-                |s| match s.as_str() {
-                    "established" => SocketState::Established,
-                    "listen" => SocketState::Listen,
-                    "syn_sent" | "syn_recv" => SocketState::Connecting,
-                    "fin_wait1" | "fin_wait2" | "time_wait" | "close_wait" | "last_ack"
-                    | "closing" => SocketState::Closing,
-                    "closed" => SocketState::Closed,
-                    _ => SocketState::Unknown("Unknown TCP state".to_string()),
-                },
-            )
-        } else {
-            SocketState::Established // UDP sockets are always in Established state
-        };
-
-        // Get process info if available
-        let (process_id, process_name) = if let Ok(output) = Command::new("lsof")
-            .args(["-i", &format!("{}:{}", local_addr.ip(), local_addr.port())])
-            .output()
-        {
-            let output = String::from_utf8_lossy(&output.stdout);
-            output.lines().nth(1).map_or((None, None), |line| {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    parts[1]
-                        .parse::<u32>()
-                        .map_or((None, None), |pid| (Some(pid), Some(parts[0].to_string())))
-                } else {
-                    (None, None)
-                }
-            })
-        } else {
-            (None, None)
+            None
         };
 
         Some(SocketInfo {
@@ -1439,87 +1659,43 @@ mod macos {
             remote_addr,
             state,
             protocol,
-            process_id,
+            process_id: Some(pid),
             process_name,
-            stats: None,
+            stats,
             socket_type,
-            socket_family,
+            socket_family: Some(socket_family),
             socket_flags: None,
-            socket_options: None,
+            socket_options,
         })
     }
 
-    fn parse_address(addr: &str) -> Option<SocketAddr> {
-        let parts: Vec<&str> = addr.split('.').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-
-        let ip = IpAddr::from_str(parts[0]).ok()?;
-        let port = parts[1].parse::<u16>().ok()?;
-
-        Some(SocketAddr::new(ip, port))
-    }
-
-    #[allow(dead_code)]
     pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
-        // Get process name using ps
-        let output = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .output()
-            .ok()?;
+        // Get process information using libproc
+        if let Ok(info) = pidinfo::<TaskAllInfo>(pid as i32, 0) {
+            let name = unsafe {
+                std::ffi::CStr::from_ptr(info.pbsd.pbi_comm.as_ptr())
+                    .to_string_lossy()
+                    .into_owned()
+            };
 
-        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let start_time = SystemTime::UNIX_EPOCH + Duration::from_secs(info.pbsd.pbi_start_tvsec as u64);
 
-        // Get user using ps
-        let output = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "user="])
-            .output()
-            .ok()?;
+            // Get memory and CPU usage
+            let memory_usage = Some(info.ptinfo.pti_resident_size);
+            let cpu_usage = Some(info.ptinfo.pti_total_user + info.ptinfo.pti_total_system);
 
-        let user = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-        // Get memory usage using ps
-        let output = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "rss="])
-            .output()
-            .ok()?;
-
-        let memory_usage = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse::<u64>()
-            .ok()
-            .map(|kb| kb * 1024); // Convert KB to bytes
-
-        // Get CPU usage using ps
-        let output = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "%cpu="])
-            .output()
-            .ok()?;
-
-        let cpu_usage = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse::<f32>()
-            .ok();
-
-        Some(ProcessInfo {
-            pid,
-            name: Some(name),
-            cmdline: None,
-            uid: None,
-            start_time: None,
-            memory_usage,
-            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-            cpu_usage: cpu_usage.map(|usage| usage as u64),
-            user: Some(user),
-        })
-    }
-
-    #[allow(dead_code)]
-    #[allow(unused_variables)]
-    fn create_test_socket() -> std::io::Result<()> {
-        use std::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        Ok(())
+            Some(ProcessInfo {
+                pid,
+                name: Some(name),
+                cmdline: None, // Command line not easily available through libproc
+                uid: Some(info.pbsd.pbi_uid),
+                start_time: Some(start_time),
+                memory_usage,
+                cpu_usage,
+                user: None, // Would need to look up user name from uid
+            })
+        } else {
+            None
+        }
     }
 }
