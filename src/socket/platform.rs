@@ -1040,8 +1040,8 @@ mod linux {
             .unwrap_or((None, None));
 
         // Get stats for TCP
-        let stats = if protocol == Protocol::Tcp {
-            process_id.and_then(|pid| get_tcp_stats(pid, inode))
+        let socket_stats = if protocol == Protocol::Tcp {
+            Some(get_tcp_stats(process_id?, inode))
         } else {
             None
         };
@@ -1066,7 +1066,7 @@ mod linux {
             protocol,
             process_id,
             process_name,
-            stats,
+            stats: socket_stats,
             socket_type: Some(socket_type),
             socket_family: Some(socket_family),
             socket_flags: None,
@@ -1102,10 +1102,11 @@ mod linux {
         }
     }
 
-    fn get_tcp_stats(_pid: u32, _inode: u64) -> Option<SocketStats> {
-        // Try to read detailed TCP info from /proc/net/tcp_info if available
-        // For now, return basic stats
-        Some(SocketStats {
+    const fn get_tcp_stats(_pid: u32, _inode: u64) -> SocketStats {
+        // Create a basic stats structure
+        // Note: libproc on macOS doesn't provide as detailed TCP statistics as Linux
+        // We'll populate what we can
+        SocketStats {
             bytes_sent: 0,
             bytes_received: 0,
             packets_sent: 0,
@@ -1142,7 +1143,7 @@ mod linux {
             connection_duration: None,
             connection_quality_score: None,
             state_history: Vec::new(),
-        })
+        }
     }
 
     pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
@@ -1472,11 +1473,11 @@ mod macos {
     use libproc::proc_pid::{listpidinfo, pidinfo};
     use libproc::processes::{pids_by_type, ProcFilter};
 
-    fn get_tcp_stats(_pid: u32, _local_addr: &SocketAddr) -> Option<SocketStats> {
+    const fn get_tcp_stats(_pid: u32, _inode: u64) -> SocketStats {
         // Create a basic stats structure
         // Note: libproc on macOS doesn't provide as detailed TCP statistics as Linux
         // We'll populate what we can
-        let stats = SocketStats {
+        SocketStats {
             bytes_sent: 0,
             bytes_received: 0,
             packets_sent: 0,
@@ -1513,9 +1514,7 @@ mod macos {
             connection_duration: None,
             connection_quality_score: None,
             state_history: Vec::new(),
-        };
-
-        Some(stats)
+        }
     }
 
     pub fn get_sockets_info() -> Vec<SocketInfo> {
@@ -1524,7 +1523,7 @@ mod macos {
         // Get all process IDs
         if let Ok(pids) = pids_by_type(ProcFilter::All) {
             for pid in pids {
-                let pid_i32 = pid as i32;
+                let pid_i32 = i32::try_from(pid).unwrap_or(i32::MAX);
 
                 // Get BSD info to know how many file descriptors this process has
                 if let Ok(bsd_info) = pidinfo::<BSDInfo>(pid_i32, 0) {
@@ -1577,7 +1576,10 @@ mod macos {
                     let addr = u32::from_be(addr_bytes);
                     let port = (port >> 8 & 0xff) | (port << 8 & 0xff00);
 
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::from(addr)), port as u16)
+                    SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::from(addr)),
+                        u16::try_from(port).unwrap_or(0),
+                    )
                 };
 
                 let remote_addr = unsafe {
@@ -1588,7 +1590,10 @@ mod macos {
                     let addr = u32::from_be(addr_bytes);
                     let port = (port >> 8 & 0xff) | (port << 8 & 0xff00);
 
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::from(addr)), port as u16)
+                    SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::from(addr)),
+                        u16::try_from(port).unwrap_or(0),
+                    )
                 };
 
                 let state = if protocol == Protocol::Tcp {
@@ -1619,16 +1624,13 @@ mod macos {
         };
 
         // Get process name from BSD info
-        let process_name = if let Ok(bsd_info) = pidinfo::<BSDInfo>(pid as i32, 0) {
-            let name = unsafe {
+        let process_name = pidinfo::<BSDInfo>(i32::try_from(pid).unwrap_or(i32::MAX), 0)
+            .ok()
+            .map(|bsd_info| unsafe {
                 std::ffi::CStr::from_ptr(bsd_info.pbi_comm.as_ptr())
                     .to_string_lossy()
                     .into_owned()
-            };
-            Some(name)
-        } else {
-            None
-        };
+            });
 
         // Determine socket type
         let socket_type = match protocol {
@@ -1649,8 +1651,8 @@ mod macos {
         });
 
         // Get TCP stats if applicable
-        let stats = if protocol == Protocol::Tcp {
-            get_tcp_stats(pid, &local_addr)
+        let socket_stats = if protocol == Protocol::Tcp {
+            Some(get_tcp_stats(pid, 0))
         } else {
             None
         };
@@ -1662,7 +1664,7 @@ mod macos {
             protocol,
             process_id: Some(pid),
             process_name,
-            stats,
+            stats: socket_stats,
             socket_type,
             socket_family: Some(socket_family),
             socket_flags: None,
@@ -1670,30 +1672,31 @@ mod macos {
         })
     }
 
+    #[allow(dead_code)]
     pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
         // Get process information using libproc
-        if let Ok(bsd_info) = pidinfo::<BSDInfo>(pid as i32, 0) {
-            let name = unsafe {
-                std::ffi::CStr::from_ptr(bsd_info.pbi_comm.as_ptr())
-                    .to_string_lossy()
-                    .into_owned()
-            };
+        pidinfo::<BSDInfo>(i32::try_from(pid).unwrap_or(i32::MAX), 0)
+            .ok()
+            .map(|bsd_info| {
+                let name = unsafe {
+                    std::ffi::CStr::from_ptr(bsd_info.pbi_comm.as_ptr())
+                        .to_string_lossy()
+                        .into_owned()
+                };
 
-            let start_time =
-                SystemTime::UNIX_EPOCH + Duration::from_secs(bsd_info.pbi_start_tvsec as u64);
+                let start_time =
+                    SystemTime::UNIX_EPOCH + Duration::from_secs(bsd_info.pbi_start_tvsec);
 
-            Some(ProcessInfo {
-                pid,
-                name: Some(name),
-                cmdline: None, // Command line not easily available through libproc on macOS
-                uid: Some(bsd_info.pbi_uid),
-                start_time: Some(start_time),
-                memory_usage: None, // Would need TaskInfo for this
-                cpu_usage: None,    // Would need TaskInfo for this
-                user: None,         // Would need to look up user name from uid
+                ProcessInfo {
+                    pid,
+                    name: Some(name),
+                    cmdline: None, // Command line not easily available through libproc on macOS
+                    uid: Some(bsd_info.pbi_uid),
+                    start_time: Some(start_time),
+                    memory_usage: None, // Would need TaskInfo for this
+                    cpu_usage: None,    // Would need TaskInfo for this
+                    user: None,         // Would need to look up user name from uid
+                }
             })
-        } else {
-            None
-        }
     }
 }
