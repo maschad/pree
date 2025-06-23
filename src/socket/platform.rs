@@ -736,10 +736,7 @@ mod tests {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{
-        Protocol, SocketFamily, SocketInfo,
-        SocketState, SocketStats, SocketType,
-    };
+    use super::{Protocol, SocketFamily, SocketInfo, SocketState, SocketStats, SocketType};
     use crate::{NetworkError, ProcessInfo};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -783,10 +780,8 @@ mod linux {
                     for fd in fds.flatten() {
                         if let FDTarget::Socket(inode) = fd.target {
                             if let Ok(stat) = process.stat() {
-                                inode_to_process.insert(
-                                    inode,
-                                    (stat.pid as u32, stat.comm.clone())
-                                );
+                                inode_to_process
+                                    .insert(inode, (stat.pid as u32, stat.comm.clone()));
                             }
                         }
                     }
@@ -840,12 +835,28 @@ mod linux {
         let inode_to_process = build_inode_to_process_map()?;
 
         // Parse TCP sockets
-        sockets.extend(parse_socket_file("/proc/net/tcp", Protocol::Tcp, &inode_to_process)?);
-        sockets.extend(parse_socket_file("/proc/net/tcp6", Protocol::Tcp, &inode_to_process)?);
+        sockets.extend(parse_socket_file(
+            "/proc/net/tcp",
+            Protocol::Tcp,
+            &inode_to_process,
+        )?);
+        sockets.extend(parse_socket_file(
+            "/proc/net/tcp6",
+            Protocol::Tcp,
+            &inode_to_process,
+        )?);
 
         // Parse UDP sockets
-        sockets.extend(parse_socket_file("/proc/net/udp", Protocol::Udp, &inode_to_process)?);
-        sockets.extend(parse_socket_file("/proc/net/udp6", Protocol::Udp, &inode_to_process)?);
+        sockets.extend(parse_socket_file(
+            "/proc/net/udp",
+            Protocol::Udp,
+            &inode_to_process,
+        )?);
+        sockets.extend(parse_socket_file(
+            "/proc/net/udp6",
+            Protocol::Udp,
+            &inode_to_process,
+        )?);
 
         Ok(sockets)
     }
@@ -1452,15 +1463,16 @@ mod macos {
         Protocol, SocketFamily, SocketInfo, SocketOptions, SocketState, SocketStats, SocketType,
     };
     use crate::ProcessInfo;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::{Duration, SystemTime};
 
     use libproc::file_info::{pidfdinfo, ListFDs, ProcFDType};
-    use libproc::net_info::{SocketFDInfo, SocketInfoKind};
-    use libproc::proc_pid::{pidinfo, PidInfo, TaskAllInfo};
+    use libproc::libproc::bsd_info::BSDInfo;
+    use libproc::net_info::{SocketFDInfo, SocketInfoKind, TcpSIState};
+    use libproc::proc_pid::{listpidinfo, pidinfo};
     use libproc::processes::{pids_by_type, ProcFilter};
 
-    fn get_tcp_stats(pid: u32, local_addr: &SocketAddr) -> Option<SocketStats> {
+    fn get_tcp_stats(_pid: u32, _local_addr: &SocketAddr) -> Option<SocketStats> {
         // Create a basic stats structure
         // Note: libproc on macOS doesn't provide as detailed TCP statistics as Linux
         // We'll populate what we can
@@ -1512,15 +1524,23 @@ mod macos {
         // Get all process IDs
         if let Ok(pids) = pids_by_type(ProcFilter::All) {
             for pid in pids {
-                // Get file descriptors for this process
-                if let Ok(fds) = pidinfo::<ListFDs>(pid as i32, 0) {
-                    for fd in fds {
-                        // Check if this is a socket
-                        if let ProcFDType::Socket = fd.proc_fdtype {
-                            // Get detailed socket information
-                            if let Ok(socket_info) = pidfdinfo::<SocketFDInfo>(pid as i32, fd.proc_fd) {
-                                if let Some(socket) = process_socket_info(pid, fd.proc_fd, socket_info) {
-                                    sockets.push(socket);
+                let pid_i32 = pid as i32;
+
+                // Get BSD info to know how many file descriptors this process has
+                if let Ok(bsd_info) = pidinfo::<BSDInfo>(pid_i32, 0) {
+                    // Get file descriptors for this process
+                    if let Ok(fds) = listpidinfo::<ListFDs>(pid_i32, bsd_info.pbi_nfiles as usize) {
+                        for fd_info in fds {
+                            if matches!(ProcFDType::from(fd_info.proc_fdtype), ProcFDType::Socket) {
+                                // Get socket information for this file descriptor
+                                if let Ok(socket_fd_info) =
+                                    pidfdinfo::<SocketFDInfo>(pid_i32, fd_info.proc_fd)
+                                {
+                                    if let Some(socket_info) =
+                                        process_socket_info(pid, fd_info.proc_fd, socket_fd_info)
+                                    {
+                                        sockets.push(socket_info);
+                                    }
                                 }
                             }
                         }
@@ -1532,101 +1552,82 @@ mod macos {
         sockets
     }
 
-    fn process_socket_info(pid: u32, fd: i32, socket_info: SocketFDInfo) -> Option<SocketInfo> {
-        let (protocol, local_addr, remote_addr, state, socket_family) = match socket_info.psi {
-            SocketInfoKind::In(info) => {
-                let protocol = match info.soi_protocol {
-                    libc::IPPROTO_TCP => Protocol::Tcp,
-                    libc::IPPROTO_UDP => Protocol::Udp,
-                    _ => return None,
+    fn process_socket_info(pid: u32, _fd: i32, socket_fd_info: SocketFDInfo) -> Option<SocketInfo> {
+        let socket_info = socket_fd_info.psi;
+        let socket_kind = SocketInfoKind::from(socket_info.soi_kind);
+
+        // Only process TCP and UDP sockets
+        let protocol = match socket_info.soi_protocol {
+            libc::IPPROTO_TCP => Protocol::Tcp,
+            libc::IPPROTO_UDP => Protocol::Udp,
+            _ => return None,
+        };
+
+        let (local_addr, remote_addr, state, socket_family) = match socket_kind {
+            SocketInfoKind::In | SocketInfoKind::Tcp => {
+                // Access TCP/IP info (unsafe due to union)
+                let tcp_info = unsafe { socket_info.soi_proto.pri_tcp };
+
+                // Extract addresses from the TCP info
+                let local_addr = unsafe {
+                    let addr_bytes = tcp_info.tcpsi_ini.insi_laddr.ina_46.i46a_addr4.s_addr;
+                    let port = tcp_info.tcpsi_ini.insi_lport;
+
+                    // Convert from network byte order
+                    let addr = u32::from_be(addr_bytes);
+                    let port = (port >> 8 & 0xff) | (port << 8 & 0xff00);
+
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::from(addr)), port as u16)
                 };
 
-                let local_addr = SocketAddr::new(
-                    IpAddr::V4(Ipv4Addr::from(u32::from_be(info.soi_proto.pri_in.insi_laddr.s_addr))),
-                    u16::from_be(info.soi_proto.pri_in.insi_lport),
-                );
+                let remote_addr = unsafe {
+                    let addr_bytes = tcp_info.tcpsi_ini.insi_faddr.ina_46.i46a_addr4.s_addr;
+                    let port = tcp_info.tcpsi_ini.insi_fport;
 
-                let remote_addr = SocketAddr::new(
-                    IpAddr::V4(Ipv4Addr::from(u32::from_be(info.soi_proto.pri_in.insi_faddr.s_addr))),
-                    u16::from_be(info.soi_proto.pri_in.insi_fport),
-                );
+                    // Convert from network byte order
+                    let addr = u32::from_be(addr_bytes);
+                    let port = (port >> 8 & 0xff) | (port << 8 & 0xff00);
 
-                let state = match info.soi_proto.pri_tcp.tcpsi_state {
-                    libc::TCPS_CLOSED => SocketState::Closed,
-                    libc::TCPS_LISTEN => SocketState::Listen,
-                    libc::TCPS_SYN_SENT | libc::TCPS_SYN_RECEIVED => SocketState::Connecting,
-                    libc::TCPS_ESTABLISHED => SocketState::Established,
-                    libc::TCPS_CLOSE_WAIT | libc::TCPS_FIN_WAIT_1 | libc::TCPS_FIN_WAIT_2
-                    | libc::TCPS_LAST_ACK | libc::TCPS_CLOSING | libc::TCPS_TIME_WAIT => SocketState::Closing,
-                    _ => SocketState::Unknown("Unknown TCP state".to_string()),
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::from(addr)), port as u16)
                 };
-
-                (protocol, local_addr, remote_addr, state, SocketFamily::Inet)
-            }
-            SocketInfoKind::In6(info) => {
-                let protocol = match info.soi_protocol {
-                    libc::IPPROTO_TCP => Protocol::Tcp,
-                    libc::IPPROTO_UDP => Protocol::Udp,
-                    _ => return None,
-                };
-
-                // Convert IPv6 address
-                let local_addr_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        info.soi_proto.pri_in6.in6si_laddr.s6_addr.as_ptr(),
-                        16,
-                    )
-                };
-                let local_addr = SocketAddr::new(
-                    IpAddr::V6(Ipv6Addr::from(*<&[u8; 16]>::try_from(local_addr_bytes).ok()?)),
-                    u16::from_be(info.soi_proto.pri_in6.in6si_lport),
-                );
-
-                let remote_addr_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        info.soi_proto.pri_in6.in6si_faddr.s6_addr.as_ptr(),
-                        16,
-                    )
-                };
-                let remote_addr = SocketAddr::new(
-                    IpAddr::V6(Ipv6Addr::from(*<&[u8; 16]>::try_from(remote_addr_bytes).ok()?)),
-                    u16::from_be(info.soi_proto.pri_in6.in6si_fport),
-                );
 
                 let state = if protocol == Protocol::Tcp {
-                    match info.soi_proto.pri_tcp.tcpsi_state {
-                        libc::TCPS_CLOSED => SocketState::Closed,
-                        libc::TCPS_LISTEN => SocketState::Listen,
-                        libc::TCPS_SYN_SENT | libc::TCPS_SYN_RECEIVED => SocketState::Connecting,
-                        libc::TCPS_ESTABLISHED => SocketState::Established,
-                        libc::TCPS_CLOSE_WAIT | libc::TCPS_FIN_WAIT_1 | libc::TCPS_FIN_WAIT_2
-                        | libc::TCPS_LAST_ACK | libc::TCPS_CLOSING | libc::TCPS_TIME_WAIT => SocketState::Closing,
+                    match TcpSIState::from(tcp_info.tcpsi_state) {
+                        TcpSIState::Closed => SocketState::Closed,
+                        TcpSIState::Listen => SocketState::Listen,
+                        TcpSIState::SynSent | TcpSIState::SynReceived => SocketState::Connecting,
+                        TcpSIState::Established => SocketState::Established,
+                        TcpSIState::CloseWait
+                        | TcpSIState::FinWait1
+                        | TcpSIState::FinWait2
+                        | TcpSIState::LastAck
+                        | TcpSIState::Closing
+                        | TcpSIState::TimeWait => SocketState::Closing,
                         _ => SocketState::Unknown("Unknown TCP state".to_string()),
                     }
                 } else {
-                    SocketState::Established // UDP sockets are always "established"
+                    SocketState::Established // UDP is connectionless
                 };
 
-                (protocol, local_addr, remote_addr, state, SocketFamily::Inet6)
+                (local_addr, remote_addr, state, SocketFamily::Inet)
             }
-            SocketInfoKind::Un(_) => {
-                // Unix domain sockets - skip for now as we're focusing on network sockets
+            SocketInfoKind::Un => {
+                // Unix domain sockets - skip for now
                 return None;
             }
             _ => return None,
         };
 
-        // Get process name
-        let (process_name, start_time) = if let Ok(info) = pidinfo::<TaskAllInfo>(pid as i32, 0) {
+        // Get process name from BSD info
+        let process_name = if let Ok(bsd_info) = pidinfo::<BSDInfo>(pid as i32, 0) {
             let name = unsafe {
-                std::ffi::CStr::from_ptr(info.pbsd.pbi_comm.as_ptr())
+                std::ffi::CStr::from_ptr(bsd_info.pbi_comm.as_ptr())
                     .to_string_lossy()
                     .into_owned()
             };
-            let start_time = SystemTime::UNIX_EPOCH + Duration::from_secs(info.pbsd.pbi_start_tvsec as u64);
-            (Some(name), Some(start_time))
+            Some(name)
         } else {
-            (None, None)
+            None
         };
 
         // Determine socket type
@@ -1671,28 +1672,25 @@ mod macos {
 
     pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
         // Get process information using libproc
-        if let Ok(info) = pidinfo::<TaskAllInfo>(pid as i32, 0) {
+        if let Ok(bsd_info) = pidinfo::<BSDInfo>(pid as i32, 0) {
             let name = unsafe {
-                std::ffi::CStr::from_ptr(info.pbsd.pbi_comm.as_ptr())
+                std::ffi::CStr::from_ptr(bsd_info.pbi_comm.as_ptr())
                     .to_string_lossy()
                     .into_owned()
             };
 
-            let start_time = SystemTime::UNIX_EPOCH + Duration::from_secs(info.pbsd.pbi_start_tvsec as u64);
-
-            // Get memory and CPU usage
-            let memory_usage = Some(info.ptinfo.pti_resident_size);
-            let cpu_usage = Some(info.ptinfo.pti_total_user + info.ptinfo.pti_total_system);
+            let start_time =
+                SystemTime::UNIX_EPOCH + Duration::from_secs(bsd_info.pbi_start_tvsec as u64);
 
             Some(ProcessInfo {
                 pid,
                 name: Some(name),
-                cmdline: None, // Command line not easily available through libproc
-                uid: Some(info.pbsd.pbi_uid),
+                cmdline: None, // Command line not easily available through libproc on macOS
+                uid: Some(bsd_info.pbi_uid),
                 start_time: Some(start_time),
-                memory_usage,
-                cpu_usage,
-                user: None, // Would need to look up user name from uid
+                memory_usage: None, // Would need TaskInfo for this
+                cpu_usage: None,    // Would need TaskInfo for this
+                user: None,         // Would need to look up user name from uid
             })
         } else {
             None
