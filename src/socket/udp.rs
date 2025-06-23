@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use crate::socket::platform::SocketInfo;
+use crate::socket::platform::{SocketFamily, SocketFlags, SocketInfo, SocketType};
 use crate::socket::socket::{Socket, SocketConfig};
 use crate::types::{ProcessInfo, Protocol, SocketState};
 use crate::Result;
@@ -146,6 +146,13 @@ impl From<UdpSocket> for SocketInfo {
             process_id: socket.process_id,
             process_name: socket.process_name,
             stats: None,
+            socket_family: Some(SocketFamily::Inet),
+            socket_type: Some(SocketType::Datagram),
+            socket_flags: Some(SocketFlags {
+                non_blocking: false,
+                close_on_exec: false,
+            }),
+            socket_options: None,
         }
     }
 }

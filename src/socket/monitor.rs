@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::socket::platform::SocketInfo;
+use crate::socket::platform::{SocketFamily, SocketInfo, SocketType};
 use crate::socket::socket::Socket;
 use crate::types::{Protocol, SocketState};
 use crate::Result;
@@ -126,6 +126,14 @@ impl SocketMonitor {
                                 process_id: socket.process_id,
                                 process_name: socket.process_name.clone(),
                                 stats: None,
+                                socket_type: match socket.protocol {
+                                    Protocol::Tcp => Some(SocketType::Stream),
+                                    Protocol::Udp => Some(SocketType::Datagram),
+                                    _ => None,
+                                },
+                                socket_family: Some(SocketFamily::Inet),
+                                socket_flags: None,
+                                socket_options: None,
                             };
                             let _ = tx.send(SocketEvent::Opened(info));
                         }
@@ -157,6 +165,14 @@ impl SocketMonitor {
                                 process_id: socket.process_id,
                                 process_name: socket.process_name.clone(),
                                 stats: None,
+                                socket_type: match socket.protocol {
+                                    Protocol::Tcp => Some(SocketType::Stream),
+                                    Protocol::Udp => Some(SocketType::Datagram),
+                                    _ => None,
+                                },
+                                socket_family: Some(SocketFamily::Inet),
+                                socket_flags: None,
+                                socket_options: None,
                             };
                             let _ = tx.send(SocketEvent::Closed(info));
                         }
@@ -191,6 +207,14 @@ impl SocketMonitor {
                                     process_id: socket.process_id,
                                     process_name: socket.process_name.clone(),
                                     stats: None,
+                                    socket_type: match socket.protocol {
+                                        Protocol::Tcp => Some(SocketType::Stream),
+                                        Protocol::Udp => Some(SocketType::Datagram),
+                                        _ => None,
+                                    },
+                                    socket_family: Some(SocketFamily::Inet),
+                                    socket_flags: None,
+                                    socket_options: None,
                                 };
                                 let _ = tx.send(SocketEvent::StateChanged(info));
                             }
