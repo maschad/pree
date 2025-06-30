@@ -41,7 +41,7 @@ pub mod socket;
 
 // Re-export core types and traits
 pub use error::{Error, Result};
-pub use types::{ProcessInfo, SocketState, Protocol};
+pub use types::{ProcessInfo, Protocol, SocketState};
 
 // Interface monitoring (extends network-interface functionality)
 use crate::error::NetworkError;
