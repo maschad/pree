@@ -53,6 +53,11 @@ socket-tracking = []
 [dev-dependencies]
 mockall    = "0.13.1"
 tokio-test = "0.4.4"
+criterion  = "0.5"
+
+[[bench]]
+name = "socket_performance"
+harness = false
 
 [[example]]
 name              = "interface_stats"
