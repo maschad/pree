@@ -988,7 +988,7 @@ mod linux {
         // Skip header
         lines_iter.next();
 
-        for line in lines_iter.flatten() {
+        for line in lines_iter.map_while(std::result::Result::ok) {
             if let Some(socket) = parse_socket_line(&line, protocol, inode_to_process) {
                 sockets.push(socket);
             }
@@ -1147,6 +1147,7 @@ mod linux {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_process_info(pid: u32) -> Option<ProcessInfo> {
         // Try using libproc first
         if let Ok(path) = proc_pid::pidpath(pid as i32) {

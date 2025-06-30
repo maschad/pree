@@ -103,13 +103,13 @@ impl RouteMonitor {
     ///
     /// # Errors
     /// Returns an error if monitoring cannot be started
-    pub const fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self) -> Result<()> {
         self.running = true;
         Ok(())
     }
 
     /// Stop monitoring route changes
-    pub const fn stop(&mut self) {
+    pub fn stop(&mut self) {
         self.running = false;
     }
 }
