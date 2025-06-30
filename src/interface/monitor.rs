@@ -141,7 +141,7 @@ impl InterfaceMonitor {
     }
 
     /// Stop monitoring interface changes
-    pub const fn stop(&mut self) {
+    pub fn stop(&mut self) {
         self.running = false;
     }
 }
@@ -171,7 +171,7 @@ impl NetworkChangeDetector {
 
     /// Set the polling interval
     #[allow(dead_code)]
-    pub const fn interval(&mut self, interval: Duration) {
+    pub fn interval(&mut self, interval: Duration) {
         self.monitor.interval = interval;
     }
 
@@ -195,7 +195,7 @@ impl NetworkChangeDetector {
     }
 
     /// Stop detecting network changes
-    pub const fn stop(&mut self) {
+    pub fn stop(&mut self) {
         self.monitor.stop();
     }
 }
