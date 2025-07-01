@@ -62,7 +62,7 @@ pub use socket::platform::{get_available_ports, get_system_socket_limit};
 
 // Optional async monitoring (behind feature flag)
 #[cfg(feature = "async")]
-pub use monitor::AsyncTrafficStream;
+pub use socket::monitor::AsyncTrafficStream;
 
 /// Result type for network operations
 pub type NetworkResult<T> = std::result::Result<T, NetworkError>;

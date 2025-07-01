@@ -1054,7 +1054,7 @@ mod linux {
 
         // Get stats for TCP
         let socket_stats = if protocol == Protocol::Tcp {
-            Some(get_tcp_stats(process_id?, inode))
+            get_tcp_stats(process_id?, inode)
         } else {
             None
         };
@@ -1115,11 +1115,11 @@ mod linux {
         }
     }
 
-    const fn get_tcp_stats(_pid: u32, _inode: u64) -> SocketStats {
+    const fn get_tcp_stats(_pid: u32, _inode: u64) -> Option<SocketStats> {
         // Create a basic stats structure
         // Note: libproc on macOS doesn't provide as detailed TCP statistics as Linux
         // We'll populate what we can
-        SocketStats {
+        Some(SocketStats {
             bytes_sent: 0,
             bytes_received: 0,
             packets_sent: 0,
@@ -1156,7 +1156,7 @@ mod linux {
             connection_duration: None,
             connection_quality_score: None,
             state_history: Vec::new(),
-        }
+        })
     }
 
     #[allow(dead_code)]
@@ -1487,11 +1487,12 @@ mod macos {
     use libproc::proc_pid::{listpidinfo, pidinfo};
     use libproc::processes::{pids_by_type, ProcFilter};
 
-    const fn get_tcp_stats(_pid: u32, _inode: u64) -> SocketStats {
+    #[allow(clippy::unnecessary_wraps)]
+    const fn get_tcp_stats(_pid: u32, _inode: u64) -> Option<SocketStats> {
         // Create a basic stats structure
         // Note: libproc on macOS doesn't provide as detailed TCP statistics as Linux
         // We'll populate what we can
-        SocketStats {
+        Some(SocketStats {
             bytes_sent: 0,
             bytes_received: 0,
             packets_sent: 0,
@@ -1528,7 +1529,7 @@ mod macos {
             connection_duration: None,
             connection_quality_score: None,
             state_history: Vec::new(),
-        }
+        })
     }
 
     pub fn get_sockets_info() -> Vec<SocketInfo> {
@@ -1666,7 +1667,7 @@ mod macos {
 
         // Get TCP stats if applicable
         let socket_stats = if protocol == Protocol::Tcp {
-            Some(get_tcp_stats(pid, 0))
+            get_tcp_stats(pid, 0)
         } else {
             None
         };
