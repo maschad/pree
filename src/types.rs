@@ -5,12 +5,12 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serde-support")]
 use serde::{Deserialize, Serialize};
 
 /// Represents the state of a network socket
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub enum SocketState {
     /// Socket is listening for connections (TCP only)
     Listen,
@@ -58,7 +58,7 @@ impl std::fmt::Display for SocketState {
 
 /// Information about a process that owns a socket
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub struct ProcessInfo {
     /// Process ID
     pub pid: u32,
@@ -112,7 +112,7 @@ impl ProcessInfo {
 
 /// Protocol type for network connections
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub enum Protocol {
     /// Transmission Control Protocol
     Tcp,
@@ -140,7 +140,7 @@ impl std::fmt::Display for Protocol {
 
 /// Network interface statistics snapshot
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub struct InterfaceStats {
     /// Interface name
     pub interface: String,
@@ -191,7 +191,7 @@ impl InterfaceStats {
 
 /// Difference between two interface statistics snapshots
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub struct InterfaceStatsDiff {
     /// Interface name
     pub interface: String,
@@ -265,7 +265,7 @@ impl InterfaceStatsDiff {
 
 /// A network route entry
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub struct RouteEntry {
     /// Destination network
     pub destination: IpAddr,
@@ -283,7 +283,7 @@ pub struct RouteEntry {
 
 /// DNS server configuration
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub struct DnsServer {
     /// DNS server IP address
     pub address: IpAddr,
