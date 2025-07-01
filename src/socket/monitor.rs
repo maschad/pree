@@ -245,7 +245,7 @@ impl SocketMonitor {
     }
 
     /// Stop monitoring socket changes
-    pub fn stop(&mut self) {
+    pub const fn stop(&mut self) {
         self.running = false;
     }
 }
