@@ -61,8 +61,7 @@ pub use types::RouteEntry;
 pub use socket::platform::{get_available_ports, get_system_socket_limit};
 
 // Optional async monitoring (behind feature flag)
-#[cfg(feature = "async")]
-pub use socket::monitor::AsyncTrafficStream;
+// AsyncTrafficStream is not yet implemented
 
 /// Result type for network operations
 pub type NetworkResult<T> = std::result::Result<T, NetworkError>;
