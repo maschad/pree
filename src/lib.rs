@@ -41,7 +41,7 @@ pub mod socket;
 
 // Re-export core types and traits
 pub use error::{Error, Result};
-pub use types::{ProcessInfo, SocketState};
+pub use types::{ProcessInfo, Protocol, SocketState};
 
 // Interface monitoring (extends network-interface functionality)
 use crate::error::NetworkError;
@@ -61,8 +61,7 @@ pub use types::RouteEntry;
 pub use socket::platform::{get_available_ports, get_system_socket_limit};
 
 // Optional async monitoring (behind feature flag)
-#[cfg(feature = "async")]
-pub use monitor::AsyncTrafficStream;
+// AsyncTrafficStream is not yet implemented
 
 /// Result type for network operations
 pub type NetworkResult<T> = std::result::Result<T, NetworkError>;

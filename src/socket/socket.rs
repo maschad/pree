@@ -10,7 +10,7 @@ use crate::{ProcessInfo, Result, SocketState};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serde-support")]
 use serde::{Deserialize, Serialize};
 
 /// Common trait for socket configuration and enumeration
@@ -57,7 +57,7 @@ pub trait SocketConfig: Sized {
 
 /// Generic socket information that applies to both TCP and UDP
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
 pub struct SocketInfo {
     /// Local socket address
     pub local_addr: SocketAddr,
