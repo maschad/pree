@@ -1,5 +1,3 @@
-🏗️ WIP 
-
 # Pree
 
 A cross-platform Rust library for network diagnostics and monitoring. Pree provides a unified API for accessing network information across different operating systems.
@@ -38,6 +36,7 @@ A cross-platform Rust library for network diagnostics and monitoring. Pree provi
   - Filter by process, port, or address
   - Port availability checking
   - Socket binding verification
+  - **Note**: Some examples may require elevated privileges to see all sockets
 
 - **Network Change Detection**
   - Interface change monitoring
@@ -59,6 +58,8 @@ Add to your `Cargo.toml`:
 [dependencies]
 pree = "0.1.0"
 ```
+
+**Note**: All examples are available in the `examples/` folder and can be run with `cargo run --example <example_name>`.
 
 ### Basic Example
 

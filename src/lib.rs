@@ -35,6 +35,7 @@ mod error;
 mod platform;
 mod types;
 
+pub mod dns;
 pub mod interface;
 pub mod routing;
 pub mod socket;

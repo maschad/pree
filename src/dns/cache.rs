@@ -1,10 +1,8 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::dns::RecordType;
-use crate::{NetworkError, Result};
+use super::RecordType;
 
 /// A DNS record with TTL information
 #[derive(Debug, Clone)]
@@ -16,12 +14,14 @@ pub struct DnsRecord {
 }
 
 /// A DNS cache that stores records with TTL
+#[derive(Debug)]
 pub struct DnsCache {
     records: Arc<RwLock<HashMap<(String, RecordType), DnsRecord>>>,
 }
 
 impl DnsCache {
     /// Create a new DNS cache
+    #[must_use]
     pub fn new() -> Self {
         Self {
             records: Arc::new(RwLock::new(HashMap::new())),
@@ -29,17 +29,21 @@ impl DnsCache {
     }
 
     /// Get a cached record
+    #[must_use]
     pub fn get(&self, name: &str, record_type: RecordType) -> Option<String> {
         let records = self.records.read().ok()?;
         let key = (name.to_string(), record_type);
 
-        if let Some(record) = records.get(&key) {
+        let result = records.get(&key).and_then(|record| {
             if record.expires_at > Instant::now() {
-                return Some(record.value.clone());
+                Some(record.value.clone())
+            } else {
+                None
             }
-        }
+        });
 
-        None
+        drop(records);
+        result
     }
 
     /// Add a record to the cache
@@ -70,18 +74,22 @@ impl DnsCache {
     }
 
     /// Get the TTL for a record
+    #[must_use]
     pub fn get_ttl(&self, name: &str, record_type: RecordType) -> Option<Duration> {
         let records = self.records.read().ok()?;
         let key = (name.to_string(), record_type);
 
-        if let Some(record) = records.get(&key) {
+        let result = records.get(&key).and_then(|record| {
             let now = Instant::now();
             if record.expires_at > now {
-                return Some(record.expires_at.duration_since(now));
+                Some(record.expires_at.duration_since(now))
+            } else {
+                None
             }
-        }
+        });
 
-        None
+        drop(records);
+        result
     }
 
     /// Clear all records from the cache
@@ -99,12 +107,14 @@ impl Default for DnsCache {
 }
 
 /// A thread-safe DNS cache that can be shared between threads
+#[derive(Debug)]
 pub struct SharedDnsCache {
     cache: Arc<DnsCache>,
 }
 
 impl SharedDnsCache {
     /// Create a new shared DNS cache
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cache: Arc::new(DnsCache::new()),
@@ -112,6 +122,7 @@ impl SharedDnsCache {
     }
 
     /// Get a cached record
+    #[must_use]
     pub fn get(&self, name: &str, record_type: RecordType) -> Option<String> {
         self.cache.get(name, record_type)
     }
@@ -132,6 +143,7 @@ impl SharedDnsCache {
     }
 
     /// Get the TTL for a record
+    #[must_use]
     pub fn get_ttl(&self, name: &str, record_type: RecordType) -> Option<Duration> {
         self.cache.get_ttl(name, record_type)
     }

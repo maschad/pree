@@ -3,7 +3,7 @@ use std::time::Duration;
 
 fn main() -> pree::Result<()> {
     // Create a DNS resolver with caching
-    let mut resolver = DnsResolver::builder()
+    let resolver = DnsResolver::builder()
         .cache(DnsCache::new())
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -12,20 +12,20 @@ fn main() -> pree::Result<()> {
     let system_dns = DnsResolver::system()?;
     println!("System DNS Servers:");
     for server in system_dns.nameservers() {
-        println!("  {}", server);
+        println!("  {server}");
     }
     println!("Search Domains: {}", system_dns.search_domains().join(", "));
 
     // Perform some DNS lookups
     let domains = ["example.com", "google.com", "github.com"];
     for domain in domains {
-        println!("\nResolving {}:", domain);
+        println!("\nResolving {domain}:");
 
         // A records
         if let Ok(records) = resolver.lookup(domain, RecordType::A) {
             println!("  A Records:");
             for record in records {
-                println!("    {}", record);
+                println!("    {record}");
             }
         }
 
@@ -33,7 +33,7 @@ fn main() -> pree::Result<()> {
         if let Ok(records) = resolver.lookup(domain, RecordType::AAAA) {
             println!("  AAAA Records:");
             for record in records {
-                println!("    {}", record);
+                println!("    {record}");
             }
         }
 
@@ -41,7 +41,7 @@ fn main() -> pree::Result<()> {
         if let Ok(records) = resolver.lookup(domain, RecordType::MX) {
             println!("  MX Records:");
             for record in records {
-                println!("    {}", record);
+                println!("    {record}");
             }
         }
 

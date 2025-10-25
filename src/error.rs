@@ -141,6 +141,10 @@ pub enum NetworkError {
     OsError(i32),
     #[error("Interface not found: {0}")]
     InterfaceNotFound(String),
+    #[error("DNS error: {0}")]
+    Dns(String),
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl From<NetworkError> for Error {
@@ -167,6 +171,11 @@ impl From<NetworkError> for Error {
                 code,
             },
             NetworkError::InterfaceNotFound(name) => Self::InterfaceNotFound { name },
+            NetworkError::Dns(msg) => Self::ConfigError { details: msg },
+            NetworkError::NotImplemented(msg) => Self::UnsupportedPlatform {
+                feature: msg,
+                platform: std::env::consts::OS.to_string(),
+            },
         }
     }
 }

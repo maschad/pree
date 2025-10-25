@@ -3,8 +3,8 @@
 //! This example shows how to get detailed socket information programmatically
 //! without relying on command-line tools.
 
-use pree::socket::platform::{get_sockets_info, SocketState};
-use pree::Protocol;
+use pree::socket::platform::get_sockets_info;
+use pree::{Protocol, SocketState};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Socket Information using libproc ===\n");
@@ -29,8 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Display TCP sockets
     println!("TCP Sockets ({}):", tcp_sockets.len());
     println!(
-        "{:<25} {:<25} {:<15} {:<10} {}",
-        "Local Address", "Remote Address", "State", "PID", "Process"
+        "{:<25} {:<25} {:<15} {:<10} Process",
+        "Local Address", "Remote Address", "State", "PID"
     );
     println!("{}", "-".repeat(90));
 
@@ -82,8 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Display UDP sockets
     println!("UDP Sockets ({}):", udp_sockets.len());
     println!(
-        "{:<25} {:<25} {:<10} {}",
-        "Local Address", "Remote Address", "PID", "Process"
+        "{:<25} {:<25} {:<10} Process",
+        "Local Address", "Remote Address", "PID"
     );
     println!("{}", "-".repeat(70));
 
