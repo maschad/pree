@@ -284,6 +284,7 @@ pub struct RouteEntry {
 /// DNS server configuration
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde-support", derive(Serialize, Deserialize))]
+#[allow(dead_code)]
 pub struct DnsServer {
     /// DNS server IP address
     pub address: IpAddr,

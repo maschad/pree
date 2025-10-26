@@ -13,7 +13,9 @@ fn main() -> pree::Result<()> {
         println!("  Destination: {}", route.destination);
         println!(
             "  Gateway: {}",
-            route.gateway.map_or("None".to_string(), |g| g.to_string())
+            route
+                .gateway
+                .map_or_else(|| "None".to_string(), |g| g.to_string())
         );
         println!("  Interface: {}", route.interface);
         println!("  Metric: {}", route.metric);
@@ -40,7 +42,9 @@ fn main() -> pree::Result<()> {
                 println!("\nRoute for {ip}:");
                 println!(
                     "  Via: {}",
-                    route.gateway.map_or("None".to_string(), |g| g.to_string())
+                    route
+                        .gateway
+                        .map_or_else(|| "None".to_string(), |g| g.to_string())
                 );
                 println!("  Interface: {}", route.interface);
             } else {
@@ -57,7 +61,9 @@ fn main() -> pree::Result<()> {
             println!("  Destination: {}", route.destination);
             println!(
                 "  Gateway: {}",
-                route.gateway.map_or("None".to_string(), |g| g.to_string())
+                route
+                    .gateway
+                    .map_or_else(|| "None".to_string(), |g| g.to_string())
             );
         }
         RouteEvent::Removed(route) => {
@@ -65,7 +71,9 @@ fn main() -> pree::Result<()> {
             println!("  Destination: {}", route.destination);
             println!(
                 "  Gateway: {}",
-                route.gateway.map_or("None".to_string(), |g| g.to_string())
+                route
+                    .gateway
+                    .map_or_else(|| "None".to_string(), |g| g.to_string())
             );
         }
         RouteEvent::Changed(old_route, new_route) => {
@@ -75,13 +83,13 @@ fn main() -> pree::Result<()> {
                 "  Old Gateway: {}",
                 old_route
                     .gateway
-                    .map_or("None".to_string(), |g| g.to_string())
+                    .map_or_else(|| "None".to_string(), |g| g.to_string())
             );
             println!(
                 "  New Gateway: {}",
                 new_route
                     .gateway
-                    .map_or("None".to_string(), |g| g.to_string())
+                    .map_or_else(|| "None".to_string(), |g| g.to_string())
             );
         }
     })?;

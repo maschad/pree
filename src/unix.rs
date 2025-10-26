@@ -216,7 +216,7 @@ pub fn get_routing_table() -> UnixResult<RoutingTable> {
         }
 
         let mut route = Route {
-            destination: IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
+            destination: IpNetwork::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
             gateway: None,
             interface: String::new(),
             metric: 0,
@@ -226,7 +226,7 @@ pub fn get_routing_table() -> UnixResult<RoutingTable> {
         while i < parts.len() {
             match *parts.get(i).unwrap() {
                 "default" => {
-                    route.destination = IpNetwork::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
+                    route.destination = IpNetwork::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
                 }
                 "via" => {
                     if i + 1 < parts.len() {
