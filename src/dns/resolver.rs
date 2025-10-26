@@ -97,7 +97,10 @@ impl DnsResolver {
     /// # Errors
     /// This function currently never returns an error but is marked as `Result` for API consistency
     pub fn get_cache_ttl(&self, name: &str, record_type: RecordType) -> Result<Option<Duration>> {
-        Ok(self.cache.as_ref().and_then(|cache| cache.get_ttl(name, record_type)))
+        Ok(self
+            .cache
+            .as_ref()
+            .and_then(|cache| cache.get_ttl(name, record_type)))
     }
 
     /// Force refresh the cache for a record
@@ -123,13 +126,19 @@ impl DnsResolver {
                 let response = resolver
                     .ipv4_lookup(name)
                     .map_err(|e| NetworkError::Dns(format!("A lookup failed: {e}")))?;
-                Ok(response.iter().map(std::string::ToString::to_string).collect())
+                Ok(response
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect())
             }
             RecordType::AAAA => {
                 let response = resolver
                     .ipv6_lookup(name)
                     .map_err(|e| NetworkError::Dns(format!("AAAA lookup failed: {e}")))?;
-                Ok(response.iter().map(std::string::ToString::to_string).collect())
+                Ok(response
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect())
             }
             RecordType::MX => {
                 let response = resolver
@@ -144,7 +153,10 @@ impl DnsResolver {
                 let response = resolver
                     .txt_lookup(name)
                     .map_err(|e| NetworkError::Dns(format!("TXT lookup failed: {e}")))?;
-                Ok(response.iter().map(std::string::ToString::to_string).collect())
+                Ok(response
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect())
             }
             RecordType::CNAME
             | RecordType::NS
