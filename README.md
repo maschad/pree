@@ -56,7 +56,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pree = "0.1.0"
+pree = "1.0.0"
 ```
 
 **Note**: All examples are available in the `examples/` folder and can be run with `cargo run --example <example_name>`.
