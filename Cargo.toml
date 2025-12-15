@@ -58,7 +58,7 @@ socket-tracking = []
 
 [dev-dependencies]
 criterion  = "0.5"
-mockall    = "0.13.1"
+mockall    = "0.14.0"
 tokio-test = "0.4.4"
 
 [[bench]]
