@@ -57,7 +57,7 @@ serde-support   = ["serde"]
 socket-tracking = []
 
 [dev-dependencies]
-criterion  = "0.5"
+criterion  = "0.8"
 mockall    = "0.13.1"
 tokio-test = "0.4.4"
 
